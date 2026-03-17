@@ -1,0 +1,36 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual envs
+.AudioLLM_env/
+.AudioLLM_env_mn5/
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Training/runtime outputs
+outputs/
+output_model/
+exp/
+kernel_meta
+*.log
+
+# Local data and large artifacts
+papers/
+logs/
+data-backup/
+models/
+figures/
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+Qwen2-Audio-finetune/
+
+# OS/editor files
+.DS_Store
+Thumbs.db

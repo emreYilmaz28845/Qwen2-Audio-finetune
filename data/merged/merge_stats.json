@@ -1,0 +1,51 @@
+{
+  "cmdc_fold": "fold1",
+  "train_total": 2164,
+  "val_total": 853,
+  "train_by_dataset": {
+    "cmdc": 695,
+    "eatd": 249,
+    "daic_woz": 1220
+  },
+  "val_by_dataset": {
+    "cmdc": 206,
+    "eatd": 237,
+    "daic_woz": 410
+  },
+  "train_by_target": {
+    "抑郁": 730,
+    "非抑郁": 1434
+  },
+  "val_by_target": {
+    "抑郁": 283,
+    "非抑郁": 570
+  },
+  "skipped_records": {
+    "train": [
+      "MDD01_Q1",
+      "MDD02_Q5",
+      "MDD03_Q4",
+      "MDD04_Q4",
+      "MDD04_Q5",
+      "MDD05_Q8",
+      "MDD07_Q5",
+      "MDD09_Q8",
+      "MDD15_Q1",
+      "MDD19_Q2",
+      "HC08_Q8",
+      "HC13_Q8",
+      "HC17_Q5",
+      "HC30_Q8",
+      "HC33_Q8",
+      "HC36_Q2"
+    ],
+    "val": [
+      "MDD21_Q1",
+      "MDD24_Q5",
+      "HC41_Q8",
+      "HC42_Q3",
+      "HC42_Q8",
+      "HC47_Q4"
+    ]
+  }
+}

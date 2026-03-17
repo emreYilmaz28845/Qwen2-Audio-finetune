@@ -1,0 +1,1 @@
+{"task": "ASR", "prompt": "<|audio_bos|><|AUDIO|><|audio_eos|>Detect the language and recognize the speech: <|zh|>"}
