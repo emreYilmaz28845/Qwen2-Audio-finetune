@@ -14,6 +14,13 @@ from torch.optim import lr_scheduler
 from utils.set_logger import set_logger
 from utils.set_seed import set_seed
 from utils.init_process import setup_ddp
+from utils.system_metrics import (
+    collect_memory_metrics,
+    format_memory_metrics,
+    prefix_metrics,
+    reset_peak_memory_stats,
+)
+from utils.wandb_logger import WandbLogger
 from utils.functions import (
     compute_acc_text,
     compute_metrics_from_stats,
@@ -145,6 +152,12 @@ def train_ddp(cfg):
     dist.barrier()
 
     logger = set_logger(cfg.env.save_path)
+    wandb_logger = WandbLogger(
+        cfg=cfg,
+        save_path=cfg.env.save_path,
+        is_main_process=(local_rank == 0),
+        logger=logger,
+    )
 
     # ===============================
     # Load model and processor
@@ -177,11 +190,14 @@ def train_ddp(cfg):
     peft_cfg["target_modules"] = list(peft_cfg["target_modules"])
     peft_cfg = LoraConfig(**peft_cfg)
 
-    model = get_peft_model(model, peft_cfg)
+    model = get_peft_model(model.language_model, peft_cfg)
+    # model = get_peft_model(model, peft_cfg)
 
     # ===============================
     # Enable gradient checkpointing to reduce activation memory
     # ===============================
+    # if hasattr(model, "config"):
+    #     model.config.use_cache = False
     if hasattr(model, "gradient_checkpointing_enable"):
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     if hasattr(model, "enable_input_require_grads"):
@@ -199,6 +215,7 @@ def train_ddp(cfg):
     model.to(device)
     if dist.get_rank() == 0:
         model.print_trainable_parameters()
+        wandb_logger.watch(model)
 
     # ===============================
     # Wrap with DDP
@@ -256,10 +273,16 @@ def train_ddp(cfg):
         prefetch_factor=cfg.data.prefetch_factor,
     )
 
+    if dist.get_rank() == 0:
+        reset_peak_memory_stats(cfg.env.device_type, device)
+
     # ===============================
     # Training loop
     # ===============================
     best_f1 = -math.inf
+    global_train_step = 0
+    optimizer_step = 0
+    wandb_log_step = max(1, int(cfg.wandb.get("log_step", 10)))
 
     for epoch in range(cfg.train.train_epoch):
         if dist.get_rank() == 0:
@@ -272,13 +295,20 @@ def train_ddp(cfg):
         grad_acc_steps = max(1, int(cfg.train.grad_accumulate_step))
 
         for train_step, batch in enumerate(train_bar):
+            global_train_step += 1
             batch.to(device)
-            outputs = model(**batch)
-            loss = outputs.loss
-            #acc = compute_acc(outputs["logits"], batch["labels"])
-            acc = compute_acc_text(processor, outputs.logits, batch["labels"])
+            # outputs = model(**batch)
+            # loss = outputs.loss
+            # #acc = compute_acc(outputs["logits"], batch["labels"])
+            # acc = compute_acc_text(processor, outputs.logits, batch["labels"])
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                outputs = model(**batch)
+                loss = outputs.loss
+                #acc = compute_acc(outputs["logits"], batch["labels"])
+                acc = compute_acc_text(processor, outputs.logits, batch["labels"])
 
             loss_for_backward = loss / grad_acc_steps
+            #torch.cuda.empty_cache()
             loss_for_backward.backward()
 
             should_step = ((train_step + 1) % grad_acc_steps == 0) or ((train_step + 1) == len(train_dataloader))
@@ -286,11 +316,30 @@ def train_ddp(cfg):
                 optim.step()
                 scheduler.step()
                 optim.zero_grad()
+                optimizer_step += 1
 
             if dist.get_rank() == 0:
                 train_bar.set_description(
                     f"[Train] epoch:{epoch} rank:{local_rank}, loss:{loss:.2f}, acc:{acc:.2f}, ga:{grad_acc_steps}"
                 )
+                if global_train_step % wandb_log_step == 0:
+                    train_memory_metrics = collect_memory_metrics(cfg.env.device_type, device)
+                    wandb_logger.log(
+                        {
+                            "train/loss": loss.item(),
+                            "train/acc": acc.item(),
+                            "train/lr": scheduler.get_last_lr()[0],
+                            "train/epoch": epoch,
+                            "train/global_step": global_train_step,
+                            "train/optimizer_step": optimizer_step,
+                            **prefix_metrics(train_memory_metrics, "train"),
+                        },
+                        step=global_train_step,
+                    )
+                    logger.info(
+                        f"[Train][Memory] epoch={epoch} step={global_train_step} | "
+                        f"{format_memory_metrics(train_memory_metrics)}"
+                    )
 
             # ===============================
             # Evaluation and saving
@@ -309,11 +358,17 @@ def train_ddp(cfg):
                 with torch.no_grad():
                     for _, batch in enumerate(eval_bar):
                         batch.to(device)
-                        outputs = model(**batch)
-                        loss = outputs.loss
-                        global_stats = compute_metrics_text_binary_accumulate(
-                            processor, outputs.logits, batch["labels"], global_stats
-                        )
+                        # outputs = model(**batch)
+                        # loss = outputs.loss
+                        # global_stats = compute_metrics_text_binary_accumulate(
+                        #     processor, outputs.logits, batch["labels"], global_stats
+                        # )
+                        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                            outputs = model(**batch)
+                            loss = outputs.loss
+                            global_stats = compute_metrics_text_binary_accumulate(
+                                processor, outputs.logits, batch["labels"], global_stats
+                            )
 
                         eval_loss += loss.item()
                         eval_steps += 1
@@ -357,13 +412,16 @@ def train_ddp(cfg):
                 )
 
                 if dist.get_rank() == 0:
+                    eval_memory_metrics = collect_memory_metrics(cfg.env.device_type, device)
                     logger.info(f"[Epoch {epoch} Step {train_step}] Eval Metrics:")
                     logger.info(
                         f"  Loss: {eval_loss:.4f}, Acc: {eval_accuracy:.4f}, "
                         f"Prec: {eval_precision:.4f}, Rec: {eval_recall:.4f}, F1: {eval_f1:.4f}, wF1: {eval_wf1:.4f}"
                     )
+                    logger.info(f"[Eval][Memory] {format_memory_metrics(eval_memory_metrics)}")
 
-                    if eval_f1 > best_f1:
+                    is_best = eval_f1 > best_f1
+                    if is_best:
                         save_time = time.strftime("%H-%M", time.localtime())
                         save_path = f"{cfg.env.save_path}/{save_time}"
                         os.makedirs(save_path, exist_ok=True)
@@ -371,3 +429,37 @@ def train_ddp(cfg):
                         best_f1 = eval_f1
                         model.module.save_pretrained(save_path)
                         processor.save_pretrained(save_path)
+                        wandb_logger.update_summary(
+                            {
+                                "best_eval_f1": best_f1,
+                                "best_model_path": save_path,
+                            }
+                        )
+
+                    wandb_logger.log(
+                        {
+                            "eval/loss": eval_loss,
+                            "eval/acc": eval_accuracy,
+                            "eval/precision": eval_precision,
+                            "eval/recall": eval_recall,
+                            "eval/f1": eval_f1,
+                            "eval/weighted_f1": eval_wf1,
+                            "eval/best_f1": best_f1,
+                            "eval/is_best": is_best,
+                            "eval/tp": reduced_stats["tp"],
+                            "eval/fp": reduced_stats["fp"],
+                            "eval/fn": reduced_stats["fn"],
+                            "eval/tn": reduced_stats["tn"],
+                            "eval/total": reduced_stats["total"],
+                            "train/epoch": epoch,
+                            "train/optimizer_step": optimizer_step,
+                            **prefix_metrics(eval_memory_metrics, "eval"),
+                        },
+                        step=global_train_step,
+                    )
+                
+
+    if dist.get_rank() == 0 and math.isfinite(best_f1):
+        wandb_logger.update_summary({"best_eval_f1": best_f1})
+    dist.barrier()
+    wandb_logger.finish()

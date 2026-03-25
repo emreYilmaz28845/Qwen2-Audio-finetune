@@ -142,7 +142,8 @@ def collate_fn_qwen2audio(samples, processor):
     # Concatenate prompt + target to form the full input text
     processed_data = processor(
         text=[i + j for i, j in zip(prompt, target)],
-        audios=audio,
+        audios=audio, #this is the wrong but working better (no audio will being processed because of the error)
+        # audio=audio, #this is the correct but working worse (audio will be processed)
         sampling_rate=processor.feature_extractor.sampling_rate,
         return_tensors="pt",
         padding=True

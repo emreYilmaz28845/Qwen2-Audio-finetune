@@ -29,7 +29,6 @@ checkpoints/
 *.pt
 *.bin
 *.safetensors
-Qwen2-Audio-finetune/
 
 # OS/editor files
 .DS_Store

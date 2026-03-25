@@ -7,25 +7,27 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$LOCAL_DIR" || exit 1
 
 MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct}"
-TRAIN_DATA_PATH="${TRAIN_DATA_PATH:-$LOCAL_DIR/data/daic_woz/train}"
-EVAL_DATA_PATH="${EVAL_DATA_PATH:-$LOCAL_DIR/data/daic_woz/val}"
+TRAIN_DATA_PATH="${TRAIN_DATA_PATH:-$LOCAL_DIR/data/merged/train}"
+EVAL_DATA_PATH="${EVAL_DATA_PATH:-$LOCAL_DIR/data/merged/val}"
 
-TRAIN_PROMPT_FILE="${TRAIN_PROMPT_FILE:-daic_woz_multiprompt.jsonl}"
-EVAL_PROMPT_FILE="${EVAL_PROMPT_FILE:-daic_woz_multiprompt.jsonl}"
+TRAIN_PROMPT_FILE="${TRAIN_PROMPT_FILE:-merged_multiprompt.jsonl}"
+EVAL_PROMPT_FILE="${EVAL_PROMPT_FILE:-merged_multiprompt.jsonl}"
 
 
 TRAIN_STRATEGY="${TRAIN_STRATEGY:-ddp}"
 DEVICE_TYPE="${DEVICE_TYPE:-cuda}"
+LR="${LR:-1e-5}"
+BATCH_SIZE="${BATCH_SIZE:-2}"
 EVAL_STEP="${EVAL_STEP:-200}"
 GRAD_ACCUMULATE_STEP="${GRAD_ACCUMULATE_STEP:-5}"
 TRAIN_EPOCH="${TRAIN_EPOCH:-20}"
 USE_BFLOAT16="${USE_BFLOAT16:-True}"
 
-WANDB_ENABLED="${WANDB_ENABLED:-false}"
+WANDB_ENABLED="${WANDB_ENABLED:-True}"
 WANDB_PROJECT="${WANDB_PROJECT:-qwen2-audio-finetune}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 WANDB_RUN_NAME="${WANDB_RUN_NAME:-}"
-WANDB_MODE="${WANDB_MODE:-online}"
+WANDB_MODE="${WANDB_MODE:-offline}"
 WANDB_LOG_STEP="${WANDB_LOG_STEP:-10}"
 
 
@@ -66,11 +68,13 @@ if [[ $TRAIN_STRATEGY == "ddp" ]]; then
         ++data.prefetch_factor=$PREFETCH_FACTOR \
         ++data.train_prompt_path=$TRAIN_DATA_PATH/$TRAIN_PROMPT_FILE \
         ++data.val_prompt_path=$EVAL_DATA_PATH/$EVAL_PROMPT_FILE \
-        ++data.train_scp_filename=daic_woz.scp \
-        ++data.eval_scp_filename=daic_woz.scp \
-        ++data.train_task_filename=daic_woz_multitask.jsonl \
-        ++data.eval_task_filename=daic_woz_multitask.jsonl \
+        ++data.train_scp_filename=merged.scp \
+        ++data.eval_scp_filename=merged.scp \
+        ++data.train_task_filename=merged_multitask.jsonl \
+        ++data.eval_task_filename=merged_multitask.jsonl \
         ++train.eval_step=$EVAL_STEP \
+        ++train.lr=$LR \
+        ++train.batch_size=$BATCH_SIZE \
         ++train.grad_accumulate_step=$GRAD_ACCUMULATE_STEP \
         ++train.train_epoch=$TRAIN_EPOCH \
         ++train.use_bfloat16=$USE_BFLOAT16 \
@@ -90,11 +94,13 @@ else
         ++data.eval_data_path=$EVAL_DATA_PATH \
         ++data.train_prompt_path=$TRAIN_DATA_PATH/$TRAIN_PROMPT_FILE \
         ++data.val_prompt_path=$EVAL_DATA_PATH/$EVAL_PROMPT_FILE \
-        ++data.train_scp_filename=daic_woz.scp \
-        ++data.eval_scp_filename=daic_woz.scp \
-        ++data.train_task_filename=daic_woz_multitask.jsonl \
-        ++data.eval_task_filename=daic_woz_multitask.jsonl \
+        ++data.train_scp_filename=merged.scp \
+        ++data.eval_scp_filename=merged.scp \
+        ++data.train_task_filename=merged_multitask.jsonl \
+        ++data.eval_task_filename=merged_multitask.jsonl \
         ++train.eval_step=$EVAL_STEP \
+        ++train.lr=$LR \
+        ++train.batch_size=$BATCH_SIZE \
         ++train.grad_accumulate_step=$GRAD_ACCUMULATE_STEP \
         ++train.train_epoch=$TRAIN_EPOCH \
         ++train.use_bfloat16=$USE_BFLOAT16 \

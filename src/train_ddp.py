@@ -32,8 +32,6 @@ import torch.nn as nn
 # ===============================
 # Adapter module definition
 # ===============================
-
-# CHECKPOINT
 class DepAdapter(nn.Module):
     def __init__(self, audio_dim, adapter_dim=512, dropout=0.1):
         super().__init__()
@@ -57,14 +55,9 @@ class DepAdapter(nn.Module):
 # ===============================
 # Modify the Qwen2Audio encoder to add an Adapter
 # ===============================
-#This function takes Qwen2-Audio’s existing audio encoder and rewires
-# it so every forward pass goes through the new DepAdapter before the encoder output is returned.
 def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
-    audio_dim = original_encoder.config.d_model #taking the audio
-    # feature dimension from the original encoder config
+    audio_dim = original_encoder.config.d_model
 
-
-    #adapter== creates the small bottleneck adapter that will post-process the audio features.
     adapter = DepAdapter(
         audio_dim=audio_dim,
         adapter_dim=adapter_config.get("adapter_dim", 512),
@@ -72,14 +65,6 @@ def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
     )
 
     original_forward = original_encoder.forward
-
-    # It defines a replacement forward method.
-    # Inside that method =
-    # it first calls the original forward
-    # extracts the audio features from the output (last_hidden_state)
-    # then passes those features through the adapter.
-    # returns the adapted features in the same format as the original output, ensuring compatibility with the rest of the model.
-
 
     def new_forward(
         self,
@@ -96,8 +81,6 @@ def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        # if the encoder returned a model output object, get the audio features by name
-        # otherwise, get the first tuple item, which is the same tensor
 
         if return_dict:
             audio_features = outputs.last_hidden_state
@@ -109,19 +92,13 @@ def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
         if return_dict:
             from ...modeling_outputs import BaseModelOutput
             return BaseModelOutput(
-                last_hidden_state=adapted_audio_features,# replace the original audio features with the adapted ones
+                last_hidden_state=adapted_audio_features,
                 hidden_states=outputs.hidden_states,
                 attentions=outputs.attentions,
             )
         else:
-            # the original encoder output is expected to be a tuple
-            # the first item in that tuple is the main hidden state
-            # so he returns a new tuple where:
-            # first element = adapted_audio_features
-            # remaining elements = original outputs[1:]
             return (adapted_audio_features,) + outputs[1:]
 
-    # original_encoder.forward = bound_version_of(new_forward) (conceptually doing this)
     original_encoder.forward = new_forward.__get__(original_encoder, type(original_encoder))
     original_encoder.audio_adapter = adapter
 
@@ -132,10 +109,7 @@ def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
 # Main training function
 # ===============================
 def train_ddp(cfg):
-    # in ddp, each process is responsible for one GPU, so local_rank indicates which GPU this process should use.
     local_rank = int(os.environ["LOCAL_RANK"])
-    # world_size is the total number of processes (GPUs) participating in the training,
-    # which is used for averaging metrics across all processes.
     world_size = int(os.environ["WORLD_SIZE"])
 
     device = f"{cfg.env.device_type}:{local_rank}"
@@ -143,10 +117,8 @@ def train_ddp(cfg):
     # Initialize DDP
     set_seed(cfg.train.seed)
     setup_ddp(cfg.env.device_type)
-    # Barrier to ensure all processes have initialized before proceeding (important for synchronized logging and saving)
     dist.barrier()
 
-    # Only the process with local_rank 0 will create the output directory and logger to avoid conflicts.
     if local_rank == 0:
         os.makedirs(cfg.env.save_path, exist_ok=True)
     dist.barrier()
@@ -165,7 +137,7 @@ def train_ddp(cfg):
     processor = AutoProcessor.from_pretrained(cfg.env.model_path, trust_remote_code=True)
 
     adapter_config = {
-        "adapter_dim": cfg.adapter.get("adapter_dim", 32),#before it was 512, but we set it to 32 in the config, so we use that value here. If not specified, it defaults to 32.
+        "adapter_dim": cfg.adapter.get("adapter_dim", 32),
         "dropout": cfg.adapter.get("dropout", 0.1),
     }
 
@@ -183,6 +155,7 @@ def train_ddp(cfg):
     # Modify the audio encoder to add an Adapter
     model.audio_tower = create_modified_qwen2audio_encoder(model.audio_tower, adapter_config)
     print(model)
+
     # ===============================
     # LoRA configuration and application
     # ===============================
@@ -191,13 +164,15 @@ def train_ddp(cfg):
     peft_cfg = LoraConfig(**peft_cfg)
 
     model = get_peft_model(model.language_model, peft_cfg)
-    #  model = get_peft_model(model, peft_cfg)
+    # model = get_peft_model(model, peft_cfg)
 
     # ===============================
     # Enable gradient checkpointing to reduce activation memory
     # ===============================
     if hasattr(model, "gradient_checkpointing_enable"):
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
     if hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()
 
@@ -209,8 +184,10 @@ def train_ddp(cfg):
             param.requires_grad = True
         else:
             param.requires_grad = False
+
     model.print_trainable_parameters()
     model.to(device)
+
     if dist.get_rank() == 0:
         model.print_trainable_parameters()
         wandb_logger.watch(model)
@@ -223,14 +200,21 @@ def train_ddp(cfg):
     # ===============================
     # Optimizer and scheduler
     # ===============================
-    optim = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.train.lr)
+    optim = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=cfg.train.lr
+    )
 
     scheduler = lr_scheduler.LambdaLR(
         optim,
         lr_lambda=lambda step: (
             min(step / cfg.train.warmup_steps, 1)
             if step < cfg.train.warmup_steps
-            else max(0.0, 1 - (step - cfg.train.warmup_steps) / (cfg.train.total_train_steps - cfg.train.warmup_steps))
+            else max(
+                0.0,
+                1 - (step - cfg.train.warmup_steps)
+                / (cfg.train.total_train_steps - cfg.train.warmup_steps)
+            )
         ),
     )
 
@@ -289,30 +273,29 @@ def train_ddp(cfg):
             train_bar = train_dataloader
 
         model.train()
-        optim.zero_grad()
+        optim.zero_grad(set_to_none=True)
         grad_acc_steps = max(1, int(cfg.train.grad_accumulate_step))
 
         for train_step, batch in enumerate(train_bar):
             global_train_step += 1
             batch.to(device)
-            # outputs = model(**batch)
-            # loss = outputs.loss
-            # #acc = compute_acc(outputs["logits"], batch["labels"])
-            # acc = compute_acc_text(processor, outputs.logits, batch["labels"])
+
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 outputs = model(**batch)
                 loss = outputs.loss
-                #acc = compute_acc(outputs["logits"], batch["labels"])
                 acc = compute_acc_text(processor, outputs.logits, batch["labels"])
 
             loss_for_backward = loss / grad_acc_steps
             loss_for_backward.backward()
 
-            should_step = ((train_step + 1) % grad_acc_steps == 0) or ((train_step + 1) == len(train_dataloader))
+            should_step = (
+                ((train_step + 1) % grad_acc_steps == 0)
+                or ((train_step + 1) == len(train_dataloader))
+            )
             if should_step:
                 optim.step()
                 scheduler.step()
-                optim.zero_grad()
+                optim.zero_grad(set_to_none=True)
                 optimizer_step += 1
 
             if dist.get_rank() == 0:
@@ -338,6 +321,9 @@ def train_ddp(cfg):
                         f"{format_memory_metrics(train_memory_metrics)}"
                     )
 
+            # Optional per-step cleanup
+            del outputs, loss, loss_for_backward, batch
+
             # ===============================
             # Evaluation and saving
             # ===============================
@@ -355,11 +341,7 @@ def train_ddp(cfg):
                 with torch.no_grad():
                     for _, batch in enumerate(eval_bar):
                         batch.to(device)
-                        # outputs = model(**batch)
-                        # loss = outputs.loss
-                        # global_stats = compute_metrics_text_binary_accumulate(
-                        #     processor, outputs.logits, batch["labels"], global_stats
-                        # )
+
                         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                             outputs = model(**batch)
                             loss = outputs.loss
@@ -369,11 +351,15 @@ def train_ddp(cfg):
 
                         eval_loss += loss.item()
                         eval_steps += 1
+
                         if dist.get_rank() == 0 and global_stats and global_stats["total"] > 0:
                             temp_acc, _, _, temp_f1, temp_wf1 = compute_metrics_from_stats(global_stats)
                             eval_bar.set_description(
                                 f"[Eval] loss {loss:.3f} | acc {temp_acc:.4f} | posF1 {temp_f1:.4f} | wF1 {temp_wf1:.4f}"
                             )
+
+                        # explicit per-batch eval cleanup
+                        del outputs, loss, batch
 
                 loss_tensor = torch.tensor(
                     [eval_loss, float(eval_steps)],
@@ -413,7 +399,8 @@ def train_ddp(cfg):
                     logger.info(f"[Epoch {epoch} Step {train_step}] Eval Metrics:")
                     logger.info(
                         f"  Loss: {eval_loss:.4f}, Acc: {eval_accuracy:.4f}, "
-                        f"Prec: {eval_precision:.4f}, Rec: {eval_recall:.4f}, F1: {eval_f1:.4f}, wF1: {eval_wf1:.4f}"
+                        f"Prec: {eval_precision:.4f}, Rec: {eval_recall:.4f}, "
+                        f"F1: {eval_f1:.4f}, wF1: {eval_wf1:.4f}"
                     )
                     logger.info(f"[Eval][Memory] {format_memory_metrics(eval_memory_metrics)}")
 
@@ -455,7 +442,17 @@ def train_ddp(cfg):
                         step=global_train_step,
                     )
 
+                # ===============================
+                # Explicit post-eval cleanup
+                # ===============================
+                del loss_tensor, stats_tensor, reduced_stats, global_stats
+                if 'eval_bar' in locals():
+                    del eval_bar
+                torch.cuda.empty_cache()
+                model.train()
+
     if dist.get_rank() == 0 and math.isfinite(best_f1):
         wandb_logger.update_summary({"best_eval_f1": best_f1})
+
     dist.barrier()
     wandb_logger.finish()
