@@ -55,7 +55,7 @@ class DataConfig:
 @dataclass
 class EnvConfig:
     device_type: str = "cuda" # npu gpu
-    save_path: str = "Qwen2-Audio-finetune/output_model"
+    save_path: str = "output_model"
     model_path: str = "Qwen2-Audio-7B-Instruct"
 
 @dataclass

@@ -21,8 +21,11 @@ def parse_deepspeed_args():
 def main_hydra(cfg):
     # ==== 初始化配置 ====
     run_config = Config()
-    run_config.env.save_path += f"/{time.strftime('%H-%M-%S')}"
     cfg = OmegaConf.merge(run_config, cfg)
+
+    run_timestamp = time.strftime('%Y%m%d_%H%M%S')
+    lr_value = str(cfg.train.lr).replace("/", "-")
+    cfg.env.save_path = os.path.join(cfg.env.save_path, f"{lr_value}_{run_timestamp}")
 
     # ==== 确保输出目录存在 ====
     os.makedirs(cfg.env.save_path, exist_ok=True)
