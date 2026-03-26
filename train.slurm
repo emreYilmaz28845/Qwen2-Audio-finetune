@@ -4,7 +4,7 @@
 #SBATCH -q acc_ehpc
 #SBATCH -t 72:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=20
+#SBATCH --cpus-per-task=80
 #SBATCH --gres=gpu:4
 #SBATCH -o ./logs/slurm-%x-%j.out
 #SBATCH -e ./logs/slurm-%x-%j.err
