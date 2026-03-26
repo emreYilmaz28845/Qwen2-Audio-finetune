@@ -6,7 +6,7 @@ class AdapterConfig:
     # Adapter配置
     adapter_dim: int = 32
     dropout: float = 0.1
-    enabled: bool = True  # 是否启用Adapter
+    enabled: bool = True
 
 @dataclass
 class PeftConfig:
