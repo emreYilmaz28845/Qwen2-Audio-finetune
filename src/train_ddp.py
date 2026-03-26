@@ -161,7 +161,8 @@ def train_ddp(cfg):
     peft_cfg = dict(cfg.peft)
     peft_cfg["target_modules"] = list(peft_cfg["target_modules"])
     peft_cfg = LoraConfig(**peft_cfg)
-
+    # pembe run bu şekilde çalıştı, paper sadece language model diyor
+    # ama github reposunda get_peft_model(model, peft_cfg) !!
     model = get_peft_model(model, peft_cfg)
 
     # ===============================

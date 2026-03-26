@@ -26,6 +26,7 @@ export TRAIN_PROMPT_FILE=merged_multiprompt.jsonl
 export EVAL_PROMPT_FILE=merged_multiprompt.jsonl
 export AUDIOLLM_DATASETS_ROOT=/gpfs/projects/etur92/ozu647717/AudioLLM/Datasets
 export PYTORCH_ALLOC_CONF=expandable_segments:True
+export NUM_GPUS=4
 
 
 export EVAL_STEP="${EVAL_STEP:-50}"

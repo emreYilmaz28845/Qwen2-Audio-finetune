@@ -22,6 +22,7 @@ EVAL_STEP="${EVAL_STEP:-200}"
 GRAD_ACCUMULATE_STEP="${GRAD_ACCUMULATE_STEP:-5}"
 TRAIN_EPOCH="${TRAIN_EPOCH:-20}"
 USE_BFLOAT16="${USE_BFLOAT16:-True}"
+NUM_GPUS="${NUM_GPUS:-1}"
 
 WANDB_ENABLED="${WANDB_ENABLED:-True}"
 WANDB_PROJECT="${WANDB_PROJECT:-qwen2-audio-finetune}"
@@ -56,7 +57,7 @@ if [[ $TRAIN_STRATEGY == "ddp" ]]; then
 
     torchrun \
         --nnodes=1 \
-        --nproc_per_node=4 \
+        --nproc_per_node="$NUM_GPUS" \
         --standalone \
         main.py \
         ++train.train_strategy=$TRAIN_STRATEGY \
@@ -84,7 +85,7 @@ else
     export DEEPSPEED_CONFIG=./config/deepspeed.json
     deepspeed \
         --num_nodes=1 \
-        --num_gpus=1 \
+        --num_gpus=$NUM_GPUS \
         main.py \
         ++train.train_strategy=$TRAIN_STRATEGY \
         ++train.deepspeed_config=$DEEPSPEED_CONFIG \
