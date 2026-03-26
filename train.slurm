@@ -5,7 +5,7 @@
 #SBATCH -t 72:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=20
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 #SBATCH -o ./logs/slurm-%x-%j.out
 #SBATCH -e ./logs/slurm-%x-%j.err
 #SBATCH --chdir=/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune

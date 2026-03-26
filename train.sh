@@ -56,7 +56,7 @@ if [[ $TRAIN_STRATEGY == "ddp" ]]; then
 
     torchrun \
         --nnodes=1 \
-        --nproc_per_node=1 \
+        --nproc_per_node=4 \
         --standalone \
         main.py \
         ++train.train_strategy=$TRAIN_STRATEGY \
