@@ -85,7 +85,7 @@ else
     export DEEPSPEED_CONFIG=./config/deepspeed.json
     deepspeed \
         --num_nodes=1 \
-        --num_gpus=$NUM_GPUS \
+        --num_gpus=1 \
         main.py \
         ++train.train_strategy=$TRAIN_STRATEGY \
         ++train.deepspeed_config=$DEEPSPEED_CONFIG \

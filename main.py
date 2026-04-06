@@ -42,6 +42,9 @@ def main_hydra(cfg):
     # ==== 训练入口 ====
     if cfg.train.train_strategy == "ddp":
         train_ddp(cfg)
+    elif cfg.train.train_strategy == "textonly":
+        from src.train_textonly import train_textonly
+        train_textonly(cfg)
     else:
         train_deepspeed(cfg)
 

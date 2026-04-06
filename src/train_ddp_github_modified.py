@@ -11,6 +11,7 @@ import math
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch
 from torch.optim import lr_scheduler
+from transformers.modeling_outputs import BaseModelOutput
 from utils.set_logger import set_logger
 from utils.set_seed import set_seed
 from utils.init_process import setup_ddp
@@ -74,30 +75,27 @@ def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
         output_hidden_states=None,
         return_dict=None,
     ):
+        if return_dict is None:
+            return_dict = self.config.use_return_dict
+
         outputs = original_forward(
             input_features=input_features,
             attention_mask=attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
+            return_dict=True,
+        )
+
+        adapted_audio_features = adapter(outputs.last_hidden_state)
+        adapted_outputs = BaseModelOutput(
+            last_hidden_state=adapted_audio_features,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
         )
 
         if return_dict:
-            audio_features = outputs.last_hidden_state
-        else:
-            audio_features = outputs[0]
-
-        adapted_audio_features = adapter(audio_features)
-
-        if return_dict:
-            from ...modeling_outputs import BaseModelOutput
-            return BaseModelOutput(
-                last_hidden_state=adapted_audio_features,
-                hidden_states=outputs.hidden_states,
-                attentions=outputs.attentions,
-            )
-        else:
-            return (adapted_audio_features,) + outputs[1:]
+            return adapted_outputs
+        return adapted_outputs.to_tuple()
 
     original_encoder.forward = new_forward.__get__(original_encoder, type(original_encoder))
     original_encoder.audio_adapter = adapter
@@ -152,7 +150,8 @@ def train_ddp(cfg):
         cfg.env.model_path, **model_load_kwargs
     )
 
-    # Modify the audio encoder to add an Adapter
+    # Match the released GitHub training recipe: add the audio adapter and
+    # fine-tune the full Qwen2-Audio model with LoRA.
     model.audio_tower = create_modified_qwen2audio_encoder(model.audio_tower, adapter_config)
     print(model)
 
@@ -163,11 +162,7 @@ def train_ddp(cfg):
     peft_cfg["target_modules"] = list(peft_cfg["target_modules"])
     peft_cfg = LoraConfig(**peft_cfg)
 
-    
-    #  THIS PART IS PROBLEMATIC!!!!!!!!!!!!!!!
-    #CHECKPOINT
-    model = get_peft_model(model.language_model, peft_cfg)
-    # model = get_peft_model(model, peft_cfg)
+    model = get_peft_model(model, peft_cfg)
 
     # ===============================
     # Enable gradient checkpointing to reduce activation memory
@@ -180,7 +175,7 @@ def train_ddp(cfg):
         model.enable_input_require_grads()
 
     # ===============================
-    # Freeze all parameters except LoRA + Adapter
+    # Match the released GitHub training recipe: train LoRA + audio adapter.
     # ===============================
     for name, param in model.named_parameters():
         if "lora_" in name or "audio_adapter" in name:

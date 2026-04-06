@@ -1,0 +1,89 @@
+"""
+DDP launcher for Optuna trials.
+
+This script is launched by torchrun and runs the training with DDP.
+It reads the trial configuration from a JSON file.
+"""
+
+import argparse
+import json
+import os
+import sys
+import tempfile
+from omegaconf import OmegaConf
+
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config.config import Config
+from optuna_hpo.train_ddp import train_textonly_ddp
+
+
+def main():
+    parser = argparse.ArgumentParser(description="DDP Optuna Trial Launcher")
+    parser.add_argument("--config-file", type=str, required=True, help="Path to trial config JSON file")
+    args = parser.parse_args()
+    
+    # Read config file
+    with open(args.config_file, 'r') as f:
+        config_data = json.load(f)
+    
+    trial_number = config_data["trial_number"]
+    trial_params = config_data["trial_params"]
+    model_path = config_data["model_path"]
+    train_data_path = config_data["train_data_path"]
+    eval_data_path = config_data["eval_data_path"]
+    save_path = config_data["save_path"]
+    
+    # Create config for training
+    cfg = Config()
+    
+    # Set hyperparameters from trial
+    cfg.train.lr = trial_params["lr"]
+    cfg.train.batch_size = trial_params["batch_size"]
+    cfg.peft.r = trial_params["lora_r"]
+    cfg.peft.lora_alpha = trial_params["lora_alpha"]
+    
+    # Set paths from config file (from SLURM environment variables)
+    cfg.env.model_path = model_path
+    cfg.data.train_data_path = train_data_path
+    cfg.data.eval_data_path = eval_data_path
+    cfg.env.save_path = save_path
+    
+    # Override prompt file paths and task filenames from environment variables
+    train_prompt_file = os.environ.get("TRAIN_PROMPT_FILE", "merged_multiprompt_textonly.jsonl")
+    eval_prompt_file = os.environ.get("EVAL_PROMPT_FILE", "merged_multiprompt_textonly.jsonl")
+    train_task_file = os.environ.get("TRAIN_TASK_FILE", "merged_multitask.jsonl")
+    eval_task_file = os.environ.get("EVAL_TASK_FILE", "merged_multitask.jsonl")
+    
+    cfg.data.train_prompt_path = os.path.join(train_data_path, train_prompt_file)
+    cfg.data.val_prompt_path = os.path.join(eval_data_path, eval_prompt_file)
+    cfg.data.train_task_filename = train_task_file
+    cfg.data.eval_task_filename = eval_task_file
+    
+    # Run training
+    trial_name = f"trial_{trial_number:03d}_lr{trial_params['lr']:.0e}_bs{trial_params['batch_size']}_r{trial_params['lora_r']}_a{trial_params['lora_alpha']}"
+    
+    try:
+        best_f1 = train_textonly_ddp(cfg, trial_name=trial_name)
+    except Exception as e:
+        print(f"Error during training: {e}")
+        best_f1 = -1.0
+    
+    # Write results to file
+    result_file = os.path.join(tempfile.gettempdir(), f"optuna_trial_{trial_number}_result.json")
+    results = {
+        "trial_number": trial_number,
+        "best_f1": best_f1,
+        "trial_params": trial_params,
+    }
+    
+    with open(result_file, 'w') as f:
+        json.dump(results, f)
+    
+    print(f"\nResults saved to: {result_file}")
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

@@ -6,12 +6,12 @@ class AdapterConfig:
     # Adapter配置
     adapter_dim: int = 32
     dropout: float = 0.1
-    enabled: bool = True
+    enabled: bool = True  # 是否启用Adapter
 
 @dataclass
 class PeftConfig:
-    r: int = 16
-    lora_alpha: int = 32
+    r: int = 8
+    lora_alpha: int = 8
     target_modules: List = field(default_factory=lambda: [ "q_proj", "v_proj", "o_proj", "up_proj","gate_proj","down_proj"])
     bias: str = "none"
     task_type: str = "CAUSAL_LM"
