@@ -133,34 +133,70 @@ class AudioDataset(torch.utils.data.Dataset):
                 "key": key
             }
 
+# OLD VERSION (BAD USAGE OF MASKING OF THE PADDING)
+# def collate_fn_qwen2audio(samples, processor):
+#     prompt = [_["prompt"] for _ in samples] # prompt = transcript+emotion description
+#     audio = [_["audio"] for _ in samples]
+#     target = [_["target"] for _ in samples]
+
+#     # Concatenate prompt + target to form the full input text
+#     processed_data = processor(
+#         text=[i + j for i, j in zip(prompt, target)],
+#         audios=audio, #this is the wrong but working better (no audio will being processed because of the error)
+#         # audio=audio, #this is the correct but working worse (audio will be processed)
+#         sampling_rate=processor.feature_extractor.sampling_rate,
+#         return_tensors="pt",
+#         padding=True
+#     )
+
+#     # ===== Process labels (mask the prompt portion) =====
+#     labels = copy.deepcopy(processed_data["input_ids"])
+#     text_ids = processor(prompt, return_tensors="pt", padding=True)
+
+#     for i, attention_mask in enumerate(text_ids["attention_mask"]):
+#         labels[i, :sum(attention_mask) +
+#                (processed_data["input_ids"][i] == processor.tokenizer.pad_token_id).sum().item()] = -100
+
+#     processed_data["labels"] = labels
+
+#     if "key" in samples[0]:
+#         keys = [_["key"] for _ in samples]
+#         processed_data["keys"] = keys
+
+#     return processed_data
 
 def collate_fn_qwen2audio(samples, processor):
-    prompt = [_["prompt"] for _ in samples] # prompt = transcript+emotion description
-    audio = [_["audio"] for _ in samples]
-    target = [_["target"] for _ in samples]
+    prompt = [s["prompt"] for s in samples]
+    audio = [s["audio"] for s in samples]
+    target = [s["target"] for s in samples]
 
-    # Concatenate prompt + target to form the full input text
     processed_data = processor(
-        text=[i + j for i, j in zip(prompt, target)],
-        audios=audio, #this is the wrong but working better (no audio will being processed because of the error)
-        # audio=audio, #this is the correct but working worse (audio will be processed)
+        text=[p + t for p, t in zip(prompt, target)],
+        audio=audio,
         sampling_rate=processor.feature_extractor.sampling_rate,
         return_tensors="pt",
         padding=True
     )
 
-    # ===== Process labels (mask the prompt portion) =====
-    labels = copy.deepcopy(processed_data["input_ids"])
-    text_ids = processor(prompt, return_tensors="pt", padding=True)
+    labels = processed_data["input_ids"].clone()
 
-    for i, attention_mask in enumerate(text_ids["attention_mask"]):
-        labels[i, :sum(attention_mask) +
-               (processed_data["input_ids"][i] == processor.tokenizer.pad_token_id).sum().item()] = -100
+    prompt_ids = processor(
+        text=prompt,
+        return_tensors="pt",
+        padding=True
+    )
+
+    prompt_lens = prompt_ids["attention_mask"].sum(dim=1)
+
+    for i, prompt_len in enumerate(prompt_lens):
+        labels[i, :prompt_len] = -100
+
+    # padding tokens loss = -100
+    labels[processed_data["attention_mask"] == 0] = -100
 
     processed_data["labels"] = labels
 
     if "key" in samples[0]:
-        keys = [_["key"] for _ in samples]
-        processed_data["keys"] = keys
+        processed_data["keys"] = [s["key"] for s in samples]
 
     return processed_data
