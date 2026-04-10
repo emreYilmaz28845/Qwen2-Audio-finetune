@@ -142,18 +142,22 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus):
             return -1.0
 
         fold_scores = [result["best_f1"] for result in fold_results]
-        finite_fold_scores = [score for score in fold_scores if math.isfinite(score)]
-        if len(finite_fold_scores) != len(fold_scores):
+        valid_fold_scores = [
+            score for score in fold_scores
+            if math.isfinite(score) and score != -1.0
+        ]
+        ignored_count = len(fold_scores) - len(valid_fold_scores)
+
+        if ignored_count > 0:
             logger.warning(
-                "Trial %s has non-finite fold scores %s. Using -1.0 for the trial result.",
+                "Trial %s is ignoring %s failed fold(s) in the CV mean: %s",
                 trial.number,
+                ignored_count,
                 fold_scores,
             )
-            mean_f1 = -1.0
-            std_f1 = 0.0
-        else:
-            mean_f1 = statistics.mean(finite_fold_scores) if finite_fold_scores else -1.0
-            std_f1 = statistics.pstdev(finite_fold_scores) if len(finite_fold_scores) > 1 else 0.0
+
+        mean_f1 = statistics.mean(valid_fold_scores) if valid_fold_scores else -1.0
+        std_f1 = statistics.pstdev(valid_fold_scores) if len(valid_fold_scores) > 1 else 0.0
 
         trial.set_user_attr("fold_results", fold_results)
         trial.set_user_attr("cv_mean_f1", mean_f1)
