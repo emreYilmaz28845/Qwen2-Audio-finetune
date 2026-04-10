@@ -1,8 +1,11 @@
 import logging
 import os
 def set_logger(save_path):
+    os.makedirs(save_path, exist_ok=True)
     logger = logging.getLogger("my_logger")
     logger.setLevel(logging.DEBUG)  # 设置日志级别
+    logger.handlers.clear()
+    logger.propagate = False
     file_handler = logging.FileHandler(f"{save_path}/train_log")
     file_handler.setLevel(logging.DEBUG)
     console_handler = logging.StreamHandler()

@@ -145,10 +145,11 @@ def train_textonly_ddp(cfg, trial_name=""):
     setup_ddp(cfg.env.device_type)
     dist.barrier()
     
-    # Create save path only on rank 0
+    if trial_name:
+        cfg.env.save_path = f"{cfg.env.save_path}_trial_{trial_name}"
+
+    # Create save path only on rank 0 after all ranks agree on the same path
     if rank == 0:
-        if trial_name:
-            cfg.env.save_path = f"{cfg.env.save_path}_trial_{trial_name}"
         os.makedirs(cfg.env.save_path, exist_ok=True)
         
         # Clean up old train_log directory if it exists
