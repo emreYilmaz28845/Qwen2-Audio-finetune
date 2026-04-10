@@ -16,6 +16,7 @@
 # =================================
 
 set -e
+set -o pipefail
 
 module purge
 module load bsc/1.0
@@ -35,7 +36,7 @@ export FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 N_TRIALS="${N_TRIALS:-20}"
-STUDY_NAME="${STUDY_NAME:-cmdc_textonly_cv_hpo_$(date +%Y%m%d)}"
+STUDY_NAME="${STUDY_NAME:-cmdc_textonly_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
 LOG_FILE="logs/optuna_cmdc_cv_5fold_${TIMESTAMP}.log"

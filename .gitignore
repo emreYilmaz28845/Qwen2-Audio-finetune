@@ -20,6 +20,8 @@ kernel_meta
 *.log
 
 # Local data and large artifacts
+output_model/
+optuna_studies/
 papers/
 logs/
 data-backup/

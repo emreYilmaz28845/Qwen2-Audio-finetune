@@ -77,6 +77,9 @@ def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_ro
             else:
                 os.environ[key] = value
 
+    if not math.isfinite(best_f1):
+        best_f1 = -1.0
+
     return {
         "fold": fold_name,
         "best_f1": float(best_f1),
@@ -139,8 +142,18 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus):
             return -1.0
 
         fold_scores = [result["best_f1"] for result in fold_results]
-        mean_f1 = statistics.mean(fold_scores) if fold_scores else -1.0
-        std_f1 = statistics.pstdev(fold_scores) if len(fold_scores) > 1 else 0.0
+        finite_fold_scores = [score for score in fold_scores if math.isfinite(score)]
+        if len(finite_fold_scores) != len(fold_scores):
+            logger.warning(
+                "Trial %s has non-finite fold scores %s. Using -1.0 for the trial result.",
+                trial.number,
+                fold_scores,
+            )
+            mean_f1 = -1.0
+            std_f1 = 0.0
+        else:
+            mean_f1 = statistics.mean(finite_fold_scores) if finite_fold_scores else -1.0
+            std_f1 = statistics.pstdev(finite_fold_scores) if len(finite_fold_scores) > 1 else 0.0
 
         trial.set_user_attr("fold_results", fold_results)
         trial.set_user_attr("cv_mean_f1", mean_f1)
@@ -189,7 +202,7 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
         study_name=study_name,
         storage=storage,
         direction="maximize",
-        load_if_exists=True,
+        load_if_exists=False,
     )
 
     objective = build_objective(
@@ -200,41 +213,47 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
         num_gpus=num_gpus,
     )
 
+    results_file = os.path.join(storage_path, f"{study_name}_results.json")
     try:
         study.optimize(objective, n_trials=n_trials, n_jobs=1)
     except KeyboardInterrupt:
         logger.info("Optimization interrupted by user")
+    finally:
+        completed_trials = [
+            trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE
+        ]
+        best_trial = study.best_trial if completed_trials else None
 
-    completed_trials = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE]
-    best_trial = study.best_trial
+        if best_trial is not None:
+            logger.info("\n%s", "=" * 70)
+            logger.info("Cross-validated optimization results")
+            logger.info("%s\n", "=" * 70)
+            logger.info("Best Trial: #%s", best_trial.number)
+            logger.info("Best mean F1: %.4f", best_trial.value)
+            logger.info("Best Hyperparameters:")
+            for key, value in best_trial.params.items():
+                logger.info("  %s: %s", key, value)
+        else:
+            logger.info("No completed trials are available to summarize.")
 
-    logger.info("\n%s", "=" * 70)
-    logger.info("Cross-validated optimization results")
-    logger.info("%s\n", "=" * 70)
-    logger.info("Best Trial: #%s", best_trial.number)
-    logger.info("Best mean F1: %.4f", best_trial.value)
-    logger.info("Best Hyperparameters:")
-    for key, value in best_trial.params.items():
-        logger.info("  %s: %s", key, value)
+        results = {
+            "study_name": study_name,
+            "n_trials": len(study.trials),
+            "n_completed": len(completed_trials),
+            "folds": folds,
+            "cmdc_root": cmdc_root,
+            "best_trial_number": best_trial.number if best_trial is not None else None,
+            "best_mean_f1": float(best_trial.value) if best_trial is not None else None,
+            "best_params": dict(best_trial.params) if best_trial is not None else None,
+            "best_fold_results": best_trial.user_attrs.get("fold_results", []) if best_trial is not None else [],
+            "all_trials": [serialize_trial(trial) for trial in study.trials],
+        }
 
-    results = {
-        "study_name": study_name,
-        "n_trials": len(study.trials),
-        "n_completed": len(completed_trials),
-        "folds": folds,
-        "cmdc_root": cmdc_root,
-        "best_trial_number": best_trial.number,
-        "best_mean_f1": float(best_trial.value),
-        "best_params": dict(best_trial.params),
-        "best_fold_results": best_trial.user_attrs.get("fold_results", []),
-        "all_trials": [serialize_trial(trial) for trial in study.trials],
-    }
+        with open(results_file, "w", encoding="utf-8") as handle:
+            json.dump(results, handle, indent=2, ensure_ascii=False)
 
-    results_file = os.path.join(storage_path, f"{study_name}_results.json")
-    with open(results_file, "w", encoding="utf-8") as handle:
-        json.dump(results, handle, indent=2, ensure_ascii=False)
+        logger.info("Results saved to: %s", results_file)
 
-    logger.info("Results saved to: %s", results_file)
     return study, best_trial
 
 
