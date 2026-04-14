@@ -70,18 +70,22 @@ def main():
         print(f"Error during training: {e}")
         best_f1 = -1.0
     
-    # Write results to file
-    result_file = os.path.join(tempfile.gettempdir(), f"optuna_trial_{trial_number}_result.json")
-    results = {
-        "trial_number": trial_number,
-        "best_f1": best_f1,
-        "trial_params": trial_params,
-    }
-    
-    with open(result_file, 'w') as f:
-        json.dump(results, f)
-    
-    print(f"\nResults saved to: {result_file}")
+    # Under torchrun every rank executes this launcher. Only rank 0 should
+    # write the shared temp result file, otherwise concurrent writes can
+    # concatenate JSON payloads and break the Optuna parent process.
+    rank = int(os.environ.get("RANK", "0"))
+    if rank == 0:
+        result_file = os.path.join(tempfile.gettempdir(), f"optuna_trial_{trial_number}_result.json")
+        results = {
+            "trial_number": trial_number,
+            "best_f1": best_f1,
+            "trial_params": trial_params,
+        }
+
+        with open(result_file, 'w') as f:
+            json.dump(results, f)
+
+        print(f"\nResults saved to: {result_file}")
     sys.exit(0)
 
 

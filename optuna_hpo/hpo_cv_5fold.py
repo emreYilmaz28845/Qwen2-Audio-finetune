@@ -136,10 +136,26 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus):
         except Exception as exc:
             logger.error("Trial %s failed during fold evaluation: %s", trial.number, exc)
             logger.exception(exc)
+            fold_scores = [result["best_f1"] for result in fold_results]
+            valid_fold_scores = [
+                score for score in fold_scores
+                if math.isfinite(score) and score != -1.0
+            ]
+            mean_f1 = statistics.mean(valid_fold_scores) if valid_fold_scores else -1.0
+            std_f1 = statistics.pstdev(valid_fold_scores) if len(valid_fold_scores) > 1 else 0.0
+
             trial.set_user_attr("fold_results", fold_results)
-            trial.set_user_attr("cv_mean_f1", -1.0)
-            trial.set_user_attr("cv_std_f1", None)
-            return -1.0
+            trial.set_user_attr("cv_mean_f1", mean_f1)
+            trial.set_user_attr("cv_std_f1", std_f1)
+
+            if valid_fold_scores:
+                logger.warning(
+                    "Trial %s is using partial CV results after failure | mean F1: %.4f | std F1: %.4f",
+                    trial.number,
+                    mean_f1,
+                    std_f1,
+                )
+            return float(mean_f1)
 
         fold_scores = [result["best_f1"] for result in fold_results]
         valid_fold_scores = [
