@@ -33,6 +33,7 @@ export SAVE_ROOT="${SAVE_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Au
 export STORAGE_PATH="${STORAGE_PATH:-optuna_studies}"
 export NUM_GPUS="${NUM_GPUS:-4}"
 export FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
+export STUDY_MODE="${STUDY_MODE:-per_fold}" # per_fold or cv_mean
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 N_TRIALS="${N_TRIALS:-20}"
@@ -48,6 +49,7 @@ echo "Timestamp: $TIMESTAMP" | tee -a "$LOG_FILE"
 echo "Job ID: $SLURM_JOB_ID" | tee -a "$LOG_FILE"
 echo "Number of CV Trials: $N_TRIALS" | tee -a "$LOG_FILE"
 echo "Study Name: $STUDY_NAME" | tee -a "$LOG_FILE"
+echo "Study Mode: $STUDY_MODE" | tee -a "$LOG_FILE"
 echo "Folds: $FOLDS" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Save Root: $SAVE_ROOT" | tee -a "$LOG_FILE"
@@ -61,7 +63,8 @@ python optuna_hpo/hpo_cv_5fold.py \
     --cmdc-root "$CMDC_ROOT" \
     --folds "$FOLDS" \
     --save-root "$SAVE_ROOT" \
-    --num-gpus "$NUM_GPUS" 2>&1 | tee -a "$LOG_FILE"
+    --num-gpus "$NUM_GPUS" \
+    --study-mode "$STUDY_MODE" 2>&1 | tee -a "$LOG_FILE"
 
 echo "" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"

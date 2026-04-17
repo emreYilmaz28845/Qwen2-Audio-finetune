@@ -18,9 +18,11 @@ echo ""
 N_TRIALS=${1:-20}
 STUDY_NAME=${2:-cmdc_textonly_cv_hpo_$(date +%Y%m%d_%H%M%S)}
 FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
+STUDY_MODE="${STUDY_MODE:-cv_mean}"
 
-echo "Number of CV trials: $N_TRIALS"
+echo "Number of trials: $N_TRIALS"
 echo "Study name: $STUDY_NAME"
+echo "Study mode: $STUDY_MODE"
 echo "Folds: $FOLDS"
 echo ""
 
@@ -28,7 +30,7 @@ if [ -d "/gpfs/projects/etur92" ]; then
     echo "Detected MN5 cluster. Submitting SLURM job..."
     echo ""
 
-    N_TRIALS="$N_TRIALS" STUDY_NAME="$STUDY_NAME" FOLDS="$FOLDS" \
+    N_TRIALS="$N_TRIALS" STUDY_NAME="$STUDY_NAME" FOLDS="$FOLDS" STUDY_MODE="$STUDY_MODE" \
         sbatch optuna_hpo/train_hpo_cmdc_cv_5fold.slurm
     echo "SLURM job submitted! Check logs/optuna*.out for progress."
 else
@@ -49,6 +51,7 @@ else
     export STORAGE_PATH
     export FOLDS
     export NUM_GPUS
+    export STUDY_MODE
 
     python optuna_hpo/hpo_cv_5fold.py \
         --n-trials "$N_TRIALS" \
@@ -57,7 +60,8 @@ else
         --cmdc-root "$CMDC_ROOT" \
         --folds "$FOLDS" \
         --save-root "$SAVE_ROOT" \
-        --num-gpus "$NUM_GPUS"
+        --num-gpus "$NUM_GPUS" \
+        --study-mode "$STUDY_MODE"
 fi
 
 echo ""

@@ -1,8 +1,11 @@
 """
-Cross-validated Optuna hyperparameter optimization for CMDC text-only training.
+Optuna hyperparameter optimization for CMDC text-only training.
 
-One Optuna trial samples a single hyperparameter set and evaluates it across
-all requested folds. The trial objective is the mean fold F1.
+Supports two study modes:
+- cv_mean: one Optuna trial samples a single hyperparameter set and evaluates
+  it across all requested folds, using the mean fold F1 as the objective
+- per_fold: each requested fold gets its own Optuna study, and every trial
+  evaluates only that single fold
 """
 
 import argparse
@@ -12,7 +15,6 @@ import math
 import os
 import statistics
 import sys
-from pathlib import Path
 
 import optuna
 import torch
@@ -30,6 +32,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+MODEL_PATH_DEFAULT = "/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct"
+
+
 def parse_folds(folds_text: str):
     return [token.strip() for token in folds_text.split() if token.strip()]
 
@@ -43,6 +48,56 @@ def get_fold_config(cmdc_root: str, fold_name: str):
         "train_task_file": f"{fold_name}_multitask.jsonl",
         "eval_task_file": f"{fold_name}_multitask.jsonl",
     }
+
+
+def sample_trial_params(trial: optuna.Trial):
+    lr = trial.suggest_float("lr", 1e-6, 1e-3, log=True)
+    batch_size = trial.suggest_categorical("batch_size", [2, 4])
+    lora_r = trial.suggest_int("lora_r", 8, 16, step=4)
+    lora_alpha = trial.suggest_int("lora_alpha", 8, 32, step=8)
+
+    return {
+        "lr": lr,
+        "batch_size": batch_size,
+        "lora_r": lora_r,
+        "lora_alpha": lora_alpha,
+    }
+
+
+def log_trial_header(trial_number, trial_params, mode_label, folds):
+    logger.info("\n%s", "=" * 70)
+    logger.info("Trial %s: %s starting", trial_number, mode_label)
+    logger.info("  LR: %.2e", trial_params["lr"])
+    logger.info("  Batch Size: %s", trial_params["batch_size"])
+    logger.info("  LoRA R: %s", trial_params["lora_r"])
+    logger.info("  LoRA Alpha: %s", trial_params["lora_alpha"])
+    logger.info("  Folds: %s", ", ".join(folds))
+    logger.info("%s\n", "=" * 70)
+
+
+def serialize_trial(trial):
+    return {
+        "trial_number": trial.number,
+        "value": None if trial.value is None else float(trial.value),
+        "state": trial.state.name,
+        "params": dict(trial.params),
+        "fold_results": trial.user_attrs.get("fold_results", []),
+        "cv_mean_f1": trial.user_attrs.get("cv_mean_f1"),
+        "cv_std_f1": trial.user_attrs.get("cv_std_f1"),
+    }
+
+
+def collect_study_summary(study):
+    completed_trials = [
+        trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE
+    ]
+    best_trial = study.best_trial if completed_trials else None
+    return completed_trials, best_trial
+
+
+def write_results_file(results_file, results):
+    with open(results_file, "w", encoding="utf-8") as handle:
+        json.dump(results, handle, indent=2, ensure_ascii=False)
 
 
 def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_root, num_gpus):
@@ -91,26 +146,13 @@ def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_ro
 
 def build_objective(cmdc_root, folds, model_path, save_root, num_gpus):
     def objective(trial: optuna.Trial):
-        lr = trial.suggest_float("lr", 1e-6, 1e-3, log=True)
-        batch_size = trial.suggest_categorical("batch_size", [2, 4])
-        lora_r = trial.suggest_int("lora_r", 8, 16, step=4)
-        lora_alpha = trial.suggest_int("lora_alpha", 8, 32, step=8)
-
-        trial_params = {
-            "lr": lr,
-            "batch_size": batch_size,
-            "lora_r": lora_r,
-            "lora_alpha": lora_alpha,
-        }
-
-        logger.info("\n%s", "=" * 70)
-        logger.info("Trial %s: cross-validated evaluation starting", trial.number)
-        logger.info("  LR: %.2e", lr)
-        logger.info("  Batch Size: %s", batch_size)
-        logger.info("  LoRA R: %s", lora_r)
-        logger.info("  LoRA Alpha: %s", lora_alpha)
-        logger.info("  Folds: %s", ", ".join(folds))
-        logger.info("%s\n", "=" * 70)
+        trial_params = sample_trial_params(trial)
+        log_trial_header(
+            trial_number=trial.number,
+            trial_params=trial_params,
+            mode_label="cross-validated evaluation",
+            folds=folds,
+        )
 
         fold_results = []
         try:
@@ -190,31 +232,61 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus):
     return objective
 
 
-def serialize_trial(trial):
-    return {
-        "trial_number": trial.number,
-        "value": None if trial.value is None else float(trial.value),
-        "state": trial.state.name,
-        "params": dict(trial.params),
-        "fold_results": trial.user_attrs.get("fold_results", []),
-        "cv_mean_f1": trial.user_attrs.get("cv_mean_f1"),
-        "cv_std_f1": trial.user_attrs.get("cv_std_f1"),
-    }
+def build_single_fold_objective(cmdc_root, fold_name, model_path, save_root, num_gpus):
+    fold_cfg = get_fold_config(cmdc_root, fold_name)
+
+    def objective(trial: optuna.Trial):
+        trial_params = sample_trial_params(trial)
+        log_trial_header(
+            trial_number=trial.number,
+            trial_params=trial_params,
+            mode_label=f"single-fold evaluation for {fold_name}",
+            folds=[fold_name],
+        )
+
+        try:
+            logger.info("Trial %s | Running %s", trial.number, fold_name)
+            fold_result = run_fold_trial(
+                trial=trial,
+                trial_params=trial_params,
+                fold_name=fold_name,
+                fold_cfg=fold_cfg,
+                model_path=model_path,
+                save_root=save_root,
+                num_gpus=num_gpus,
+            )
+        except Exception as exc:
+            logger.error("Trial %s failed during %s evaluation: %s", trial.number, fold_name, exc)
+            logger.exception(exc)
+            fold_result = {
+                "fold": fold_name,
+                "best_f1": -1.0,
+                "save_path": os.path.join(save_root, f"trial_{trial.number:03d}", fold_name),
+                "train_data_path": fold_cfg["train_data_path"],
+                "eval_data_path": fold_cfg["eval_data_path"],
+            }
+
+        best_f1 = fold_result["best_f1"]
+        trial.set_user_attr("fold_results", [fold_result])
+        trial.set_user_attr("cv_mean_f1", best_f1)
+        trial.set_user_attr("cv_std_f1", 0.0)
+
+        logger.info(
+            "Trial %s complete | %s best F1: %.4f",
+            trial.number,
+            fold_name,
+            best_f1,
+        )
+        return float(best_f1)
+
+    return objective
 
 
-def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus):
-    os.makedirs(storage_path, exist_ok=True)
-    os.makedirs(save_root, exist_ok=True)
-
+def run_study(study_name, storage_path, summary_label):
     storage = f"sqlite:///{os.path.abspath(storage_path)}/{study_name}.db"
-
     logger.info("\n%s", "=" * 70)
-    logger.info("Starting cross-validated Optuna optimization")
+    logger.info("%s", summary_label)
     logger.info("  Study Name: %s", study_name)
-    logger.info("  Number of Trials: %s", n_trials)
-    logger.info("  CMDC Root: %s", cmdc_root)
-    logger.info("  Folds: %s", ", ".join(folds))
-    logger.info("  Save Root: %s", save_root)
     logger.info("  Storage: %s", storage)
     logger.info("%s\n", "=" * 70)
 
@@ -224,11 +296,33 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
         direction="maximize",
         load_if_exists=False,
     )
+    return study
+
+
+def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus):
+    os.makedirs(storage_path, exist_ok=True)
+    os.makedirs(save_root, exist_ok=True)
+
+    logger.info("\n%s", "=" * 70)
+    logger.info("Starting Optuna optimization")
+    logger.info("  Study Mode: cv_mean")
+    logger.info("  Study Name: %s", study_name)
+    logger.info("  Number of Trials: %s", n_trials)
+    logger.info("  CMDC Root: %s", cmdc_root)
+    logger.info("  Folds: %s", ", ".join(folds))
+    logger.info("  Save Root: %s", save_root)
+    logger.info("%s\n", "=" * 70)
+
+    study = run_study(
+        study_name=study_name,
+        storage_path=storage_path,
+        summary_label="Creating cv_mean study",
+    )
 
     objective = build_objective(
         cmdc_root=cmdc_root,
         folds=folds,
-        model_path=os.environ.get("MODEL_PATH", "/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct"),
+        model_path=os.environ.get("MODEL_PATH", MODEL_PATH_DEFAULT),
         save_root=save_root,
         num_gpus=num_gpus,
     )
@@ -239,10 +333,7 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
     except KeyboardInterrupt:
         logger.info("Optimization interrupted by user")
     finally:
-        completed_trials = [
-            trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE
-        ]
-        best_trial = study.best_trial if completed_trials else None
+        completed_trials, best_trial = collect_study_summary(study)
 
         if best_trial is not None:
             logger.info("\n%s", "=" * 70)
@@ -269,17 +360,146 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
             "all_trials": [serialize_trial(trial) for trial in study.trials],
         }
 
-        with open(results_file, "w", encoding="utf-8") as handle:
-            json.dump(results, handle, indent=2, ensure_ascii=False)
-
+        write_results_file(results_file, results)
         logger.info("Results saved to: %s", results_file)
 
     return study, best_trial
 
 
+def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus):
+    os.makedirs(storage_path, exist_ok=True)
+    os.makedirs(save_root, exist_ok=True)
+
+    logger.info("\n%s", "=" * 70)
+    logger.info("Starting Optuna optimization")
+    logger.info("  Study Mode: per_fold")
+    logger.info("  Base Study Name: %s", study_name)
+    logger.info("  Trials Per Fold: %s", n_trials)
+    logger.info("  CMDC Root: %s", cmdc_root)
+    logger.info("  Folds: %s", ", ".join(folds))
+    logger.info("  Save Root: %s", save_root)
+    logger.info("%s\n", "=" * 70)
+
+    model_path = os.environ.get("MODEL_PATH", MODEL_PATH_DEFAULT)
+    fold_summaries = []
+
+    for fold_name in folds:
+        fold_study_name = f"{study_name}_{fold_name}"
+        fold_save_root = os.path.join(save_root, fold_name)
+        os.makedirs(fold_save_root, exist_ok=True)
+
+        logger.info("\n%s", "=" * 70)
+        logger.info("Starting per-fold study")
+        logger.info("  Fold: %s", fold_name)
+        logger.info("  Study Name: %s", fold_study_name)
+        logger.info("  Trials: %s", n_trials)
+        logger.info("  Save Root: %s", fold_save_root)
+        logger.info("%s\n", "=" * 70)
+
+        study = run_study(
+            study_name=fold_study_name,
+            storage_path=storage_path,
+            summary_label=f"Creating per_fold study for {fold_name}",
+        )
+        objective = build_single_fold_objective(
+            cmdc_root=cmdc_root,
+            fold_name=fold_name,
+            model_path=model_path,
+            save_root=fold_save_root,
+            num_gpus=num_gpus,
+        )
+
+        try:
+            study.optimize(objective, n_trials=n_trials, n_jobs=1)
+        except KeyboardInterrupt:
+            logger.info("Optimization interrupted by user during fold %s", fold_name)
+            raise
+        except Exception as exc:
+            logger.error("Fold study %s failed: %s", fold_name, exc)
+            logger.exception(exc)
+
+        completed_trials, best_trial = collect_study_summary(study)
+        results_file = os.path.join(storage_path, f"{fold_study_name}_results.json")
+        storage_file = os.path.join(os.path.abspath(storage_path), f"{fold_study_name}.db")
+
+        results = {
+            "study_name": fold_study_name,
+            "base_study_name": study_name,
+            "study_mode": "per_fold",
+            "fold": fold_name,
+            "n_trials": len(study.trials),
+            "n_completed": len(completed_trials),
+            "cmdc_root": cmdc_root,
+            "best_trial_number": best_trial.number if best_trial is not None else None,
+            "best_f1": float(best_trial.value) if best_trial is not None else None,
+            "best_params": dict(best_trial.params) if best_trial is not None else None,
+            "best_fold_result": (
+                best_trial.user_attrs.get("fold_results", [])[0]
+                if best_trial is not None and best_trial.user_attrs.get("fold_results")
+                else None
+            ),
+            "all_trials": [serialize_trial(trial) for trial in study.trials],
+        }
+        write_results_file(results_file, results)
+
+        fold_summary = {
+            "fold": fold_name,
+            "study_name": fold_study_name,
+            "db_path": storage_file,
+            "results_path": os.path.abspath(results_file),
+            "save_root": os.path.abspath(fold_save_root),
+            "n_trials": len(study.trials),
+            "n_completed": len(completed_trials),
+            "best_trial_number": best_trial.number if best_trial is not None else None,
+            "best_f1": float(best_trial.value) if best_trial is not None else None,
+            "best_params": dict(best_trial.params) if best_trial is not None else None,
+            "status": "completed" if best_trial is not None else "no_completed_trials",
+        }
+        fold_summaries.append(fold_summary)
+
+        logger.info("Per-fold results saved to: %s", results_file)
+        if best_trial is not None:
+            logger.info(
+                "Fold %s complete | best trial #%s | best F1: %.4f",
+                fold_name,
+                best_trial.number,
+                best_trial.value,
+            )
+        else:
+            logger.warning("Fold %s complete with no completed trials", fold_name)
+
+    valid_best_scores = [
+        fold_summary["best_f1"]
+        for fold_summary in fold_summaries
+        if fold_summary["best_f1"] is not None and math.isfinite(fold_summary["best_f1"])
+    ]
+    summary_results = {
+        "study_name": study_name,
+        "study_mode": "per_fold",
+        "folds": folds,
+        "trials_per_fold": n_trials,
+        "cmdc_root": cmdc_root,
+        "save_root": os.path.abspath(save_root),
+        "fold_studies": fold_summaries,
+        "post_run_best_f1_mean": (
+            statistics.mean(valid_best_scores) if valid_best_scores else None
+        ),
+        "post_run_best_f1_std": (
+            statistics.pstdev(valid_best_scores) if len(valid_best_scores) > 1 else 0.0
+            if valid_best_scores
+            else None
+        ),
+    }
+    summary_file = os.path.join(storage_path, f"{study_name}_results.json")
+    write_results_file(summary_file, summary_results)
+    logger.info("Per-fold summary saved to: %s", summary_file)
+
+    return fold_summaries
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Cross-validated Optuna HPO for CMDC text-only training"
+        description="Optuna HPO for CMDC text-only training"
     )
     parser.add_argument("--n-trials", type=int, default=20)
     parser.add_argument("--study-name", type=str, default="cmdc_textonly_cv_hpo")
@@ -288,6 +508,12 @@ def main():
     parser.add_argument("--folds", type=str, default=os.environ.get("FOLDS", "fold1 fold2 fold3 fold4 fold5"))
     parser.add_argument("--save-root", type=str, default=os.environ.get("SAVE_ROOT", "output_model/optuna_cmdc_cv_5fold"))
     parser.add_argument("--num-gpus", type=int, default=int(os.environ.get("NUM_GPUS", "4")))
+    parser.add_argument(
+        "--study-mode",
+        type=str,
+        choices=["cv_mean", "per_fold"],
+        default=os.environ.get("STUDY_MODE", "cv_mean"),
+    )
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -297,15 +523,26 @@ def main():
     logger.info("Total VRAM: %.2f GB", torch.cuda.get_device_properties(0).total_memory / 1e9)
 
     folds = parse_folds(args.folds)
-    run_optimization(
-        n_trials=args.n_trials,
-        study_name=args.study_name,
-        storage_path=args.storage_path,
-        cmdc_root=args.cmdc_root,
-        folds=folds,
-        save_root=args.save_root,
-        num_gpus=args.num_gpus,
-    )
+    if args.study_mode == "per_fold":
+        run_per_fold_optimization(
+            n_trials=args.n_trials,
+            study_name=args.study_name,
+            storage_path=args.storage_path,
+            cmdc_root=args.cmdc_root,
+            folds=folds,
+            save_root=args.save_root,
+            num_gpus=args.num_gpus,
+        )
+    else:
+        run_optimization(
+            n_trials=args.n_trials,
+            study_name=args.study_name,
+            storage_path=args.storage_path,
+            cmdc_root=args.cmdc_root,
+            folds=folds,
+            save_root=args.save_root,
+            num_gpus=args.num_gpus,
+        )
 
 
 if __name__ == "__main__":
