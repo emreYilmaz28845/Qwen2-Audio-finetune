@@ -7,7 +7,8 @@
 #
 # Usage:
 #   bash eval.sh                     # uses defaults below
-#   bash eval.sh /path/to/best       # override peft_path
+#   bash eval.sh /path/to/best       # evaluate a LoRA checkpoint
+#   bash eval.sh none                # evaluate the base model without LoRA
 # ============================================================
 
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -29,18 +30,29 @@ echo "============================================"
 echo "  Per-Dataset Evaluation (TEXT-ONLY mode)"
 echo "============================================"
 echo "  MODEL_PATH : $MODEL_PATH"
-echo "  PEFT_PATH  : $PEFT_PATH"
+if [[ -z "$PEFT_PATH" || "$PEFT_PATH" == "none" || "$PEFT_PATH" == "null" || "$PEFT_PATH" == "base" || "$PEFT_PATH" == "baseline" ]]; then
+    echo "  PEFT_PATH  : (none - base model)"
+else
+    echo "  PEFT_PATH  : $PEFT_PATH"
+fi
 echo "  DATA_PATH  : $DATA_PATH"
 echo "  DEVICE     : $DEVICE"
 echo "============================================"
 
 # --- Run evaluation ---
-python evaluate_per_dataset.py \
-    --model_path  "$MODEL_PATH" \
-    --peft_path   "$PEFT_PATH" \
-    --data_path   "$DATA_PATH" \
-    --prompt_path "$PROMPT_PATH" \
-    --scp_filename "$SCP_FILENAME" \
-    --task_filename "$TASK_FILENAME" \
-    --batch_size  "$BATCH_SIZE" \
-    --device      "$DEVICE"
+CMD=(
+    python evaluate_per_dataset.py
+    --model_path "$MODEL_PATH"
+    --data_path "$DATA_PATH"
+    --prompt_path "$PROMPT_PATH"
+    --scp_filename "$SCP_FILENAME"
+    --task_filename "$TASK_FILENAME"
+    --batch_size "$BATCH_SIZE"
+    --device "$DEVICE"
+)
+
+if [[ -n "$PEFT_PATH" && "$PEFT_PATH" != "none" && "$PEFT_PATH" != "null" && "$PEFT_PATH" != "base" && "$PEFT_PATH" != "baseline" ]]; then
+    CMD+=(--peft_path "$PEFT_PATH")
+fi
+
+"${CMD[@]}"

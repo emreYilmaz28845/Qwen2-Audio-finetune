@@ -23,6 +23,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 # --- Set the checkpoint to evaluate ---
 # Override via: sbatch --export=PEFT_PATH=/path/to/checkpoint eval.slurm
+# Base model baseline: sbatch --export=PEFT_PATH=none eval.slurm
 export PEFT_PATH="${PEFT_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/1e-05_20260330_023140/07-15}"
 
 echo "Evaluating checkpoint: $PEFT_PATH"

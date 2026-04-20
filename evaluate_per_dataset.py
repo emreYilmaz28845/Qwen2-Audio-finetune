@@ -6,7 +6,7 @@ which means training only used the LLM decoder (text-only, no audio pipeline).
 This eval script matches that behavior: it loads the LoRA checkpoint onto
 the language_model and calls it directly, stripping audio features from batches.
 
-Loads a saved LoRA checkpoint and evaluates on the merged val set,
+Loads an optional LoRA checkpoint and evaluates on the merged val set,
 reporting separate metrics (Accuracy, Precision, Recall, F1, Weighted F1)
 for DAIC-WOZ, EATD, CMDC, and overall.
 
@@ -14,6 +14,11 @@ Usage:
     python evaluate_per_dataset.py \\
         --model_path /path/to/Qwen2-Audio-7B-Instruct \\
         --peft_path  output_model/<run>/best \\
+        --data_path  data/merged/val \\
+        --prompt_path data/merged/val/merged_multiprompt.jsonl
+
+    python evaluate_per_dataset.py \\
+        --model_path /path/to/Qwen2-Audio-7B-Instruct \\
         --data_path  data/merged/val \\
         --prompt_path data/merged/val/merged_multiprompt.jsonl
 """
@@ -123,8 +128,8 @@ def main():
     )
     parser.add_argument("--model_path", type=str, required=True,
                         help="Path to base Qwen2-Audio-7B-Instruct model")
-    parser.add_argument("--peft_path", type=str, required=True,
-                        help="Path to saved LoRA adapter checkpoint (e.g. output_model/<run>/best)")
+    parser.add_argument("--peft_path", type=str, default="",
+                        help="Optional path to saved LoRA adapter checkpoint (e.g. output_model/<run>/best)")
     parser.add_argument("--data_path", type=str, default="data/merged/val",
                         help="Path to merged val data directory")
     parser.add_argument("--prompt_path", type=str, default="data/merged/val/merged_multiprompt.jsonl",
@@ -138,12 +143,14 @@ def main():
     parser.add_argument("--device", type=str, default="cuda:0",
                         help="Device to use for evaluation")
     parser.add_argument("--output_json", type=str, default="",
-                        help="Path to save results JSON (default: <peft_path>/per_dataset_eval.json)")
+                        help="Path to save results JSON (default: <peft_path>/per_dataset_eval.json or ./base_per_dataset_eval.json)")
     args = parser.parse_args()
 
     device = args.device
+    peft_path = (args.peft_path or "").strip()
+    use_peft = peft_path.lower() not in {"", "none", "null", "base", "baseline"}
     print(f"[Config] model_path: {args.model_path}")
-    print(f"[Config] peft_path:  {args.peft_path}")
+    print(f"[Config] peft_path:  {peft_path if use_peft else '(none - base model)'}")
     print(f"[Config] data_path:  {args.data_path}")
     print(f"[Config] device:     {device}")
     print(f"[Config] mode:       TEXT-ONLY (matching train_ddp.py line 197)")
@@ -167,8 +174,12 @@ def main():
 
     # Load LoRA adapter onto the language model ONLY (matching training)
     # No DepAdapter, no audio_tower modification — training never used them
-    print("[2/4] Loading LoRA adapter onto language_model...")
-    model = PeftModel.from_pretrained(full_model.language_model, args.peft_path)
+    if use_peft:
+        print("[2/4] Loading LoRA adapter onto language_model...")
+        model = PeftModel.from_pretrained(full_model.language_model, peft_path)
+    else:
+        print("[2/4] Using base language_model without LoRA adapter...")
+        model = full_model.language_model
     model.eval()
     model.to(device)
     del full_model  # free memory — we only need the LLM
@@ -270,7 +281,11 @@ def main():
     # Save results to JSON
     output_json = args.output_json
     if not output_json:
-        output_json = os.path.join(args.peft_path, "per_dataset_eval.json")
+        output_json = (
+            os.path.join(peft_path, "per_dataset_eval.json")
+            if use_peft
+            else os.path.abspath("base_per_dataset_eval.json")
+        )
     os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else ".", exist_ok=True)
     with open(output_json, "w") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
