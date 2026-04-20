@@ -1,13 +1,18 @@
 """
 Per-dataset evaluation script for the text-only Qwen2-7B model.
 
-Loads a saved LoRA checkpoint (trained with train_textonly.py) and evaluates
+Loads an optional LoRA checkpoint (trained with train_textonly.py) and evaluates
 on the merged val set, reporting separate metrics for DAIC-WOZ, EATD, CMDC.
 
 Usage:
     python evaluate_textonly.py \\
         --model_path /path/to/Qwen2-7B-Instruct \\
         --peft_path  output_model/<run>/best \\
+        --data_path  data/merged/val \\
+        --prompt_path data/merged/val/merged_multiprompt_textonly.jsonl
+
+    python evaluate_textonly.py \\
+        --model_path /path/to/Qwen2-7B-Instruct \\
         --data_path  data/merged/val \\
         --prompt_path data/merged/val/merged_multiprompt_textonly.jsonl
 """
@@ -135,8 +140,8 @@ def main():
     )
     parser.add_argument("--model_path", type=str, required=True,
                         help="Path to base Qwen2-7B-Instruct model")
-    parser.add_argument("--peft_path", type=str, required=True,
-                        help="Path to saved LoRA adapter checkpoint")
+    parser.add_argument("--peft_path", type=str, default="",
+                        help="Optional path to saved LoRA adapter checkpoint")
     parser.add_argument("--data_path", type=str, default="data/merged/val")
     parser.add_argument("--prompt_path", type=str,
                         default="data/merged/val/merged_multiprompt_textonly.jsonl")
@@ -147,8 +152,10 @@ def main():
     args = parser.parse_args()
 
     device = args.device
+    peft_path = (args.peft_path or "").strip()
+    use_peft = peft_path.lower() not in {"", "none", "null", "base", "baseline"}
     print(f"[Config] model_path: {args.model_path}")
-    print(f"[Config] peft_path:  {args.peft_path}")
+    print(f"[Config] peft_path:  {peft_path if use_peft else '(none - base model)'}")
     print(f"[Config] data_path:  {args.data_path}")
     print(f"[Config] device:     {device}")
     print(f"[Config] mode:       TEXT-ONLY (Qwen2-7B)")
@@ -168,8 +175,12 @@ def main():
         low_cpu_mem_usage=True,
     )
 
-    print("[2/4] Loading LoRA adapter...")
-    model = PeftModel.from_pretrained(base_model, args.peft_path)
+    if use_peft:
+        print("[2/4] Loading LoRA adapter...")
+        model = PeftModel.from_pretrained(base_model, peft_path)
+    else:
+        print("[2/4] Using base model without LoRA adapter...")
+        model = base_model
     model.eval()
     model.to(device)
 
@@ -260,7 +271,11 @@ def main():
     # Save JSON
     output_json = args.output_json
     if not output_json:
-        output_json = os.path.join(args.peft_path, "per_dataset_eval_textonly.json")
+        output_json = (
+            os.path.join(peft_path, "per_dataset_eval_textonly.json")
+            if use_peft
+            else os.path.abspath("base_per_dataset_eval_textonly.json")
+        )
     os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else ".", exist_ok=True)
     with open(output_json, "w") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
