@@ -15,6 +15,7 @@ import math
 import os
 import statistics
 import sys
+from collections import Counter
 
 import optuna
 import torch
@@ -57,6 +58,67 @@ def get_fold_config(cmdc_root: str, fold_name: str, input_mode: str):
         "train_scp_file": f"{fold_name}.scp",
         "eval_scp_file": f"{fold_name}.scp",
     }
+
+
+def _load_task_keys(data_path: str, task_file: str):
+    task_path = os.path.join(data_path, task_file)
+    keys = []
+    with open(task_path, encoding="utf-8") as handle:
+        for line in handle:
+            item = json.loads(line)
+            keys.append(item["key"])
+    return keys
+
+
+def _load_scp_keys(data_path: str, scp_file: str):
+    scp_path = os.path.join(data_path, scp_file)
+    keys = set()
+    with open(scp_path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            utt_id, _ = line.strip().split(" ", 1)
+            keys.add(utt_id)
+    return keys
+
+
+def validate_fold_audio_config(fold_name: str, fold_cfg: dict):
+    issues = []
+    for split_name, data_path, task_file, scp_file in [
+        ("train", fold_cfg["train_data_path"], fold_cfg["train_task_file"], fold_cfg["train_scp_file"]),
+        ("eval", fold_cfg["eval_data_path"], fold_cfg["eval_task_file"], fold_cfg["eval_scp_file"]),
+    ]:
+        task_keys = _load_task_keys(data_path, task_file)
+        scp_keys = _load_scp_keys(data_path, scp_file)
+        missing = sorted({key for key in task_keys if key not in scp_keys})
+        duplicate_counts = {key: count for key, count in Counter(task_keys).items() if count > 1}
+        if missing:
+            preview = ", ".join(missing[:10])
+            suffix = " ..." if len(missing) > 10 else ""
+            issues.append(
+                f"{fold_name} {split_name}: {len(missing)} task key(s) missing from {scp_file}: {preview}{suffix}"
+            )
+        if duplicate_counts:
+            dup_preview = ", ".join(f"{key}x{count}" for key, count in list(sorted(duplicate_counts.items()))[:10])
+            suffix = " ..." if len(duplicate_counts) > 10 else ""
+            issues.append(
+                f"{fold_name} {split_name}: duplicate task keys in {task_file}: {dup_preview}{suffix}"
+            )
+    return issues
+
+
+def validate_audio_fold_configs(cmdc_root: str, folds, input_mode: str):
+    if input_mode != INPUT_MODE_AUDIOTEXT:
+        return
+
+    all_issues = []
+    for fold_name in folds:
+        fold_cfg = get_fold_config(cmdc_root, fold_name, input_mode)
+        all_issues.extend(validate_fold_audio_config(fold_name, fold_cfg))
+
+    if all_issues:
+        message = "Audio fold validation failed:\n- " + "\n- ".join(all_issues)
+        raise RuntimeError(message)
 
 
 def sample_trial_params(trial: optuna.Trial):
@@ -319,6 +381,7 @@ def run_study(study_name, storage_path, summary_label):
 def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus, input_mode):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
+    validate_audio_fold_configs(cmdc_root, folds, input_mode)
 
     logger.info("\n%s", "=" * 70)
     logger.info("Starting Optuna optimization")
@@ -389,6 +452,7 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
 def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus, input_mode):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
+    validate_audio_fold_configs(cmdc_root, folds, input_mode)
 
     logger.info("\n%s", "=" * 70)
     logger.info("Starting Optuna optimization")

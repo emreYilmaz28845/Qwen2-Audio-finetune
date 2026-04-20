@@ -142,21 +142,22 @@ def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
         output_hidden_states=None,
         return_dict=None,
     ):
+        effective_return_dict = self.config.use_return_dict if return_dict is None else return_dict
         outputs = original_forward(
             input_features=input_features,
             attention_mask=attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
+            return_dict=effective_return_dict,
         )
 
-        if return_dict:
+        if effective_return_dict:
             audio_features = outputs.last_hidden_state
         else:
             audio_features = outputs[0]
 
         adapted_audio_features = adapter(audio_features)
-        if return_dict:
+        if effective_return_dict:
             from transformers.modeling_outputs import BaseModelOutput
 
             return BaseModelOutput(
