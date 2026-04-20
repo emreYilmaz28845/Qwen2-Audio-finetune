@@ -708,6 +708,9 @@ MDD03_Q4 ../Datasets/CMDC/MDD03/Q4.wav
 MDD04_Q4 ../Datasets/CMDC/MDD04/Q4.wav
 MDD04_Q5 ../Datasets/CMDC/MDD04/Q5.wav
 MDD05_Q8 ../Datasets/CMDC/MDD05/Q8.wav
+MDD07_Q5 ../Datasets/CMDC/MDD07/Q5.wav
+MDD09_Q8 ../Datasets/CMDC/MDD09/Q8.wav
+MDD15_Q1 ../Datasets/CMDC/MDD15/Q1.wav
 MDD19_Q2 ../Datasets/CMDC/MDD19/Q2.wav
 MDD21_Q1 ../Datasets/CMDC/MDD21/Q1.wav
 MDD24_Q5 ../Datasets/CMDC/MDD24/Q5.wav
