@@ -27,7 +27,7 @@ source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5/bin/activate
 cd /gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
 mkdir -p logs output_model optuna_studies
 
-export INPUT_MODE="${INPUT_MODE:-textonly}" # textonly or audiotext
+export INPUT_MODE="${INPUT_MODE:-audiotext}" # textonly or audiotext
 if [ "$INPUT_MODE" = "audiotext" ]; then
     export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct}"
 else
@@ -42,7 +42,7 @@ export STUDY_MODE="${STUDY_MODE:-cv_mean}" # per_fold or cv_mean
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 N_TRIALS="${N_TRIALS:-20}"
-STUDY_NAME="${STUDY_NAME:-cmdc_textonly_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME="${STUDY_NAME:-cmdc_$(INPUT_MODE)_$(STUDY_MODE)_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
 LOG_FILE="logs/optuna_cmdc_cv_5fold_${TIMESTAMP}.log"
