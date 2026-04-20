@@ -33,20 +33,29 @@ logger = logging.getLogger(__name__)
 
 
 MODEL_PATH_DEFAULT = "/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct"
+INPUT_MODE_TEXTONLY = "textonly"
+INPUT_MODE_AUDIOTEXT = "audiotext"
 
 
 def parse_folds(folds_text: str):
     return [token.strip() for token in folds_text.split() if token.strip()]
 
 
-def get_fold_config(cmdc_root: str, fold_name: str):
+def get_fold_config(cmdc_root: str, fold_name: str, input_mode: str):
+    prompt_file = (
+        f"{fold_name}_multiprompt_textonly.jsonl"
+        if input_mode == INPUT_MODE_TEXTONLY
+        else f"{fold_name}_multiprompt_audiotext.jsonl"
+    )
     return {
         "train_data_path": os.path.join(cmdc_root, fold_name, "train"),
         "eval_data_path": os.path.join(cmdc_root, fold_name, "test"),
-        "train_prompt_file": f"{fold_name}_multiprompt_textonly.jsonl",
-        "eval_prompt_file": f"{fold_name}_multiprompt_textonly.jsonl",
+        "train_prompt_file": prompt_file,
+        "eval_prompt_file": prompt_file,
         "train_task_file": f"{fold_name}_multitask.jsonl",
         "eval_task_file": f"{fold_name}_multitask.jsonl",
+        "train_scp_file": f"{fold_name}.scp",
+        "eval_scp_file": f"{fold_name}.scp",
     }
 
 
@@ -100,18 +109,22 @@ def write_results_file(results_file, results):
         json.dump(results, handle, indent=2, ensure_ascii=False)
 
 
-def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_root, num_gpus):
+def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_root, num_gpus, input_mode):
     previous_env = {
         "TRAIN_PROMPT_FILE": os.environ.get("TRAIN_PROMPT_FILE"),
         "EVAL_PROMPT_FILE": os.environ.get("EVAL_PROMPT_FILE"),
         "TRAIN_TASK_FILE": os.environ.get("TRAIN_TASK_FILE"),
         "EVAL_TASK_FILE": os.environ.get("EVAL_TASK_FILE"),
+        "TRAIN_SCP_FILE": os.environ.get("TRAIN_SCP_FILE"),
+        "EVAL_SCP_FILE": os.environ.get("EVAL_SCP_FILE"),
     }
 
     os.environ["TRAIN_PROMPT_FILE"] = fold_cfg["train_prompt_file"]
     os.environ["EVAL_PROMPT_FILE"] = fold_cfg["eval_prompt_file"]
     os.environ["TRAIN_TASK_FILE"] = fold_cfg["train_task_file"]
     os.environ["EVAL_TASK_FILE"] = fold_cfg["eval_task_file"]
+    os.environ["TRAIN_SCP_FILE"] = fold_cfg["train_scp_file"]
+    os.environ["EVAL_SCP_FILE"] = fold_cfg["eval_scp_file"]
 
     fold_save_path = os.path.join(save_root, f"trial_{trial.number:03d}", fold_name)
 
@@ -123,6 +136,7 @@ def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_ro
             train_data_path=fold_cfg["train_data_path"],
             eval_data_path=fold_cfg["eval_data_path"],
             save_path=fold_save_path,
+            input_mode=input_mode,
             num_gpus=num_gpus,
         )
     finally:
@@ -141,10 +155,11 @@ def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_ro
         "save_path": fold_save_path,
         "train_data_path": fold_cfg["train_data_path"],
         "eval_data_path": fold_cfg["eval_data_path"],
+        "input_mode": input_mode,
     }
 
 
-def build_objective(cmdc_root, folds, model_path, save_root, num_gpus):
+def build_objective(cmdc_root, folds, model_path, save_root, num_gpus, input_mode):
     def objective(trial: optuna.Trial):
         trial_params = sample_trial_params(trial)
         log_trial_header(
@@ -157,7 +172,7 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus):
         fold_results = []
         try:
             for fold_name in folds:
-                fold_cfg = get_fold_config(cmdc_root, fold_name)
+                fold_cfg = get_fold_config(cmdc_root, fold_name, input_mode)
                 logger.info("Trial %s | Running %s", trial.number, fold_name)
                 fold_result = run_fold_trial(
                     trial=trial,
@@ -167,6 +182,7 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus):
                     model_path=model_path,
                     save_root=save_root,
                     num_gpus=num_gpus,
+                    input_mode=input_mode,
                 )
                 fold_results.append(fold_result)
                 logger.info(
@@ -232,8 +248,8 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus):
     return objective
 
 
-def build_single_fold_objective(cmdc_root, fold_name, model_path, save_root, num_gpus):
-    fold_cfg = get_fold_config(cmdc_root, fold_name)
+def build_single_fold_objective(cmdc_root, fold_name, model_path, save_root, num_gpus, input_mode):
+    fold_cfg = get_fold_config(cmdc_root, fold_name, input_mode)
 
     def objective(trial: optuna.Trial):
         trial_params = sample_trial_params(trial)
@@ -254,6 +270,7 @@ def build_single_fold_objective(cmdc_root, fold_name, model_path, save_root, num
                 model_path=model_path,
                 save_root=save_root,
                 num_gpus=num_gpus,
+                input_mode=input_mode,
             )
         except Exception as exc:
             logger.error("Trial %s failed during %s evaluation: %s", trial.number, fold_name, exc)
@@ -299,7 +316,7 @@ def run_study(study_name, storage_path, summary_label):
     return study
 
 
-def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus):
+def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus, input_mode):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
 
@@ -307,6 +324,7 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
     logger.info("Starting Optuna optimization")
     logger.info("  Study Mode: cv_mean")
     logger.info("  Study Name: %s", study_name)
+    logger.info("  Input Mode: %s", input_mode)
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
@@ -325,6 +343,7 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
         model_path=os.environ.get("MODEL_PATH", MODEL_PATH_DEFAULT),
         save_root=save_root,
         num_gpus=num_gpus,
+        input_mode=input_mode,
     )
 
     results_file = os.path.join(storage_path, f"{study_name}_results.json")
@@ -353,6 +372,7 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
             "n_completed": len(completed_trials),
             "folds": folds,
             "cmdc_root": cmdc_root,
+            "input_mode": input_mode,
             "best_trial_number": best_trial.number if best_trial is not None else None,
             "best_mean_f1": float(best_trial.value) if best_trial is not None else None,
             "best_params": dict(best_trial.params) if best_trial is not None else None,
@@ -366,7 +386,7 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
     return study, best_trial
 
 
-def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus):
+def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus, input_mode):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
 
@@ -374,6 +394,7 @@ def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, fol
     logger.info("Starting Optuna optimization")
     logger.info("  Study Mode: per_fold")
     logger.info("  Base Study Name: %s", study_name)
+    logger.info("  Input Mode: %s", input_mode)
     logger.info("  Trials Per Fold: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
@@ -407,6 +428,7 @@ def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, fol
             model_path=model_path,
             save_root=fold_save_root,
             num_gpus=num_gpus,
+            input_mode=input_mode,
         )
 
         try:
@@ -427,6 +449,7 @@ def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, fol
             "base_study_name": study_name,
             "study_mode": "per_fold",
             "fold": fold_name,
+            "input_mode": input_mode,
             "n_trials": len(study.trials),
             "n_completed": len(completed_trials),
             "cmdc_root": cmdc_root,
@@ -448,6 +471,7 @@ def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, fol
             "db_path": storage_file,
             "results_path": os.path.abspath(results_file),
             "save_root": os.path.abspath(fold_save_root),
+            "input_mode": input_mode,
             "n_trials": len(study.trials),
             "n_completed": len(completed_trials),
             "best_trial_number": best_trial.number if best_trial is not None else None,
@@ -477,6 +501,7 @@ def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, fol
         "study_name": study_name,
         "study_mode": "per_fold",
         "folds": folds,
+        "input_mode": input_mode,
         "trials_per_fold": n_trials,
         "cmdc_root": cmdc_root,
         "save_root": os.path.abspath(save_root),
@@ -509,6 +534,12 @@ def main():
     parser.add_argument("--save-root", type=str, default=os.environ.get("SAVE_ROOT", "output_model/optuna_cmdc_cv_5fold"))
     parser.add_argument("--num-gpus", type=int, default=int(os.environ.get("NUM_GPUS", "4")))
     parser.add_argument(
+        "--input-mode",
+        type=str,
+        choices=[INPUT_MODE_TEXTONLY, INPUT_MODE_AUDIOTEXT],
+        default=os.environ.get("INPUT_MODE", INPUT_MODE_TEXTONLY),
+    )
+    parser.add_argument(
         "--study-mode",
         type=str,
         choices=["cv_mean", "per_fold"],
@@ -523,6 +554,7 @@ def main():
     logger.info("Total VRAM: %.2f GB", torch.cuda.get_device_properties(0).total_memory / 1e9)
 
     folds = parse_folds(args.folds)
+    os.environ["INPUT_MODE"] = args.input_mode
     if args.study_mode == "per_fold":
         run_per_fold_optimization(
             n_trials=args.n_trials,
@@ -532,6 +564,7 @@ def main():
             folds=folds,
             save_root=args.save_root,
             num_gpus=args.num_gpus,
+            input_mode=args.input_mode,
         )
     else:
         run_optimization(
@@ -542,6 +575,7 @@ def main():
             folds=folds,
             save_root=args.save_root,
             num_gpus=args.num_gpus,
+            input_mode=args.input_mode,
         )
 
 

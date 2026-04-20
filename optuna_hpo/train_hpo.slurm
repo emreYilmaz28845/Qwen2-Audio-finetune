@@ -29,15 +29,26 @@ mkdir -p logs output_model optuna_studies
 # Environment Variables
 # =================================
 
-export MODEL_PATH="/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct"
+export INPUT_MODE="${INPUT_MODE:-textonly}" # textonly or audiotext
+if [ "$INPUT_MODE" = "audiotext" ]; then
+    export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct}"
+    export TRAIN_PROMPT_FILE="${TRAIN_PROMPT_FILE:-merged_multiprompt.jsonl}"
+    export EVAL_PROMPT_FILE="${EVAL_PROMPT_FILE:-merged_multiprompt.jsonl}"
+else
+    export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct}"
+    export TRAIN_PROMPT_FILE="${TRAIN_PROMPT_FILE:-merged_multiprompt_textonly.jsonl}"
+    export EVAL_PROMPT_FILE="${EVAL_PROMPT_FILE:-merged_multiprompt_textonly.jsonl}"
+fi
 export TRAIN_DATA_PATH="/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/data/merged/train"
 export EVAL_DATA_PATH="/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/data/merged/val"
 export SAVE_PATH="/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna"
+export TRAIN_SCP_FILE="${TRAIN_SCP_FILE:-merged.scp}"
+export EVAL_SCP_FILE="${EVAL_SCP_FILE:-merged.scp}"
+export WAV_TYPE="${WAV_TYPE:-wav}"
+export NUM_GPUS="${NUM_GPUS:-4}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 # File names for prompts and tasks
-export TRAIN_PROMPT_FILE="merged_multiprompt_textonly.jsonl"
-export EVAL_PROMPT_FILE="merged_multiprompt_textonly.jsonl"
 export TRAIN_TASK_FILE="merged_multitask.jsonl"
 export EVAL_TASK_FILE="merged_multitask.jsonl"
 
@@ -68,6 +79,7 @@ echo "Timestamp: $TIMESTAMP" | tee -a "$LOG_FILE"
 echo "Job ID: $SLURM_JOB_ID" | tee -a "$LOG_FILE"
 echo "Number of Trials: $N_TRIALS" | tee -a "$LOG_FILE"
 echo "Study Name: $STUDY_NAME" | tee -a "$LOG_FILE"
+echo "Input Mode: $INPUT_MODE" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
@@ -79,7 +91,8 @@ echo "" | tee -a "$LOG_FILE"
 python optuna_hpo/hpo.py \
     --n-trials "$N_TRIALS" \
     --study-name "$STUDY_NAME" \
-    --storage-path "$STORAGE_PATH" 2>&1 | tee -a "$LOG_FILE"
+    --storage-path "$STORAGE_PATH" \
+    --input-mode "$INPUT_MODE" 2>&1 | tee -a "$LOG_FILE"
 
 # =================================
 # Post-run summary

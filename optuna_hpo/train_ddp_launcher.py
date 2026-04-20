@@ -16,7 +16,7 @@ from omegaconf import OmegaConf
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.config import Config
-from optuna_hpo.train_ddp import train_textonly_ddp
+from optuna_hpo.train_ddp import train_ddp
 
 
 def main():
@@ -34,6 +34,7 @@ def main():
     train_data_path = config_data["train_data_path"]
     eval_data_path = config_data["eval_data_path"]
     save_path = config_data["save_path"]
+    input_mode = config_data.get("input_mode", os.environ.get("INPUT_MODE", "textonly"))
     
     # Create config for training
     cfg = Config()
@@ -50,22 +51,34 @@ def main():
     cfg.data.eval_data_path = eval_data_path
     cfg.env.save_path = save_path
     
-    # Override prompt file paths and task filenames from environment variables
-    train_prompt_file = os.environ.get("TRAIN_PROMPT_FILE", "merged_multiprompt_textonly.jsonl")
-    eval_prompt_file = os.environ.get("EVAL_PROMPT_FILE", "merged_multiprompt_textonly.jsonl")
+    # Override prompt/scp/task file paths from environment variables
+    default_prompt_file = (
+        "merged_multiprompt_textonly.jsonl"
+        if input_mode == "textonly"
+        else "merged_multiprompt.jsonl"
+    )
+    train_prompt_file = os.environ.get("TRAIN_PROMPT_FILE", default_prompt_file)
+    eval_prompt_file = os.environ.get("EVAL_PROMPT_FILE", default_prompt_file)
     train_task_file = os.environ.get("TRAIN_TASK_FILE", "merged_multitask.jsonl")
     eval_task_file = os.environ.get("EVAL_TASK_FILE", "merged_multitask.jsonl")
-    
+    default_scp_file = os.environ.get("SCP_FILE_DEFAULT", "merged.scp")
+    train_scp_file = os.environ.get("TRAIN_SCP_FILE", default_scp_file)
+    eval_scp_file = os.environ.get("EVAL_SCP_FILE", default_scp_file)
+    wav_type = os.environ.get("WAV_TYPE", "wav")
+
     cfg.data.train_prompt_path = os.path.join(train_data_path, train_prompt_file)
     cfg.data.val_prompt_path = os.path.join(eval_data_path, eval_prompt_file)
     cfg.data.train_task_filename = train_task_file
     cfg.data.eval_task_filename = eval_task_file
+    cfg.data.train_scp_filename = train_scp_file
+    cfg.data.eval_scp_filename = eval_scp_file
+    cfg.data.wav_type = wav_type
     
     # Run training
     trial_name = f"trial_{trial_number:03d}_lr{trial_params['lr']:.0e}_bs{trial_params['batch_size']}_r{trial_params['lora_r']}_a{trial_params['lora_alpha']}"
     
     try:
-        best_f1 = train_textonly_ddp(cfg, trial_name=trial_name)
+        best_f1 = train_ddp(cfg, trial_name=trial_name, input_mode=input_mode)
     except Exception as e:
         print(f"Error during training: {e}")
         best_f1 = -1.0
@@ -80,6 +93,7 @@ def main():
             "trial_number": trial_number,
             "best_f1": best_f1,
             "trial_params": trial_params,
+            "input_mode": input_mode,
         }
 
         with open(result_file, 'w') as f:

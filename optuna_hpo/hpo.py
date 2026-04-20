@@ -35,6 +35,8 @@ logging.basicConfig(
     format="%(asctime)s - [%(levelname)s] - %(message)s"
 )
 logger = logging.getLogger(__name__)
+INPUT_MODE_TEXTONLY = "textonly"
+INPUT_MODE_AUDIOTEXT = "audiotext"
 
 
 # ===============================
@@ -68,6 +70,7 @@ def objective(trial: optuna.Trial):
     logger.info(f"  Batch Size: {batch_size}")
     logger.info(f"  LoRA R: {lora_r}")
     logger.info(f"  LoRA Alpha: {lora_alpha}")
+    logger.info(f"  Input Mode: {os.environ.get('INPUT_MODE', INPUT_MODE_TEXTONLY)}")
     logger.info(f"{'='*70}\n")
     
     try:
@@ -87,6 +90,8 @@ def objective(trial: optuna.Trial):
             "Qwen2-Audio-finetune/data/merged/val"
         )
         save_path = os.environ.get("SAVE_PATH", "output_model/optuna")
+        input_mode = os.environ.get("INPUT_MODE", INPUT_MODE_TEXTONLY)
+        num_gpus = int(os.environ.get("NUM_GPUS", "4"))
         
         # ===============================
         # Launch DDP training
@@ -105,7 +110,8 @@ def objective(trial: optuna.Trial):
             train_data_path=train_data_path,
             eval_data_path=eval_data_path,
             save_path=save_path,
-            num_gpus=4
+            input_mode=input_mode,
+            num_gpus=num_gpus,
         )
         
         # ===============================
@@ -127,7 +133,8 @@ def objective(trial: optuna.Trial):
 def run_optimization(
     n_trials=20,
     study_name="qwen2_textonly_hpo",
-    storage_path="optuna_studies"
+    storage_path="optuna_studies",
+    input_mode=INPUT_MODE_TEXTONLY,
 ):
     """
     Run Optuna hyperparameter optimization.
@@ -151,6 +158,7 @@ def run_optimization(
     logger.info(f"\n{'='*70}")
     logger.info(f"Starting Optuna Hyperparameter Optimization")
     logger.info(f"  Study Name: {study_name}")
+    logger.info(f"  Input Mode: {input_mode}")
     logger.info(f"  Number of Trials: {n_trials}")
     logger.info(f"  Storage: {storage}")
     logger.info(f"{'='*70}\n")
@@ -204,6 +212,7 @@ def run_optimization(
         "study_name": study_name,
         "n_trials": len(study.trials),
         "n_completed": len(completed_trials),
+        "input_mode": input_mode,
         "best_trial_number": best_trial.number,
         "best_f1": float(best_trial.value),
         "best_params": best_trial.params,
@@ -257,6 +266,13 @@ if __name__ == "__main__":
         default="optuna_studies",
         help="Directory to store Optuna study database (default: optuna_studies)"
     )
+    parser.add_argument(
+        "--input-mode",
+        type=str,
+        choices=[INPUT_MODE_TEXTONLY, INPUT_MODE_AUDIOTEXT],
+        default=os.environ.get("INPUT_MODE", INPUT_MODE_TEXTONLY),
+        help="Training input mode: textonly or audiotext"
+    )
     
     args = parser.parse_args()
     
@@ -266,10 +282,12 @@ if __name__ == "__main__":
     
     logger.info(f"GPU Available: {torch.cuda.get_device_name(0)}")
     logger.info(f"Total VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+    os.environ["INPUT_MODE"] = args.input_mode
     
     # Run optimization
     study, best_trial = run_optimization(
         n_trials=args.n_trials,
         study_name=args.study_name,
-        storage_path=args.storage_path
+        storage_path=args.storage_path,
+        input_mode=args.input_mode,
     )

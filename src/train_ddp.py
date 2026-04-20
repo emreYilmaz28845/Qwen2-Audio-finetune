@@ -166,8 +166,8 @@ def train_ddp(cfg):
     
     #  THIS PART IS PROBLEMATIC!!!!!!!!!!!!!!!
     #CHECKPOINT
-    model = get_peft_model(model.language_model, peft_cfg)
-    # model = get_peft_model(model, peft_cfg)
+    # model = get_peft_model(model.language_model, peft_cfg)
+    model = get_peft_model(model, peft_cfg)
 
     # ===============================
     # Enable gradient checkpointing to reduce activation memory

@@ -20,6 +20,7 @@ def launch_ddp_training(
     train_data_path: str,
     eval_data_path: str,
     save_path: str,
+    input_mode: str = "textonly",
     num_gpus: int = 4
 ) -> float:
     """
@@ -49,6 +50,7 @@ def launch_ddp_training(
         "train_data_path": train_data_path,
         "eval_data_path": eval_data_path,
         "save_path": save_path,
+        "input_mode": input_mode,
     }
     
     with open(trial_config_file, 'w') as f:
@@ -71,6 +73,7 @@ def launch_ddp_training(
     print(f"  Batch Size: {trial_params['batch_size']}")
     print(f"  LoRA R: {trial_params['lora_r']}")
     print(f"  LoRA Alpha: {trial_params['lora_alpha']}")
+    print(f"  Input Mode: {input_mode}")
     print(f"Command: {' '.join(cmd)}")
     print(f"{'='*70}\n")
     

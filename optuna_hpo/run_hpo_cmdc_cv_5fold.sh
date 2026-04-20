@@ -19,10 +19,12 @@ N_TRIALS=${1:-20}
 STUDY_NAME=${2:-cmdc_textonly_cv_hpo_$(date +%Y%m%d_%H%M%S)}
 FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
 STUDY_MODE="${STUDY_MODE:-cv_mean}"
+INPUT_MODE="${INPUT_MODE:-textonly}"
 
 echo "Number of trials: $N_TRIALS"
 echo "Study name: $STUDY_NAME"
 echo "Study mode: $STUDY_MODE"
+echo "Input mode: $INPUT_MODE"
 echo "Folds: $FOLDS"
 echo ""
 
@@ -30,7 +32,7 @@ if [ -d "/gpfs/projects/etur92" ]; then
     echo "Detected MN5 cluster. Submitting SLURM job..."
     echo ""
 
-    N_TRIALS="$N_TRIALS" STUDY_NAME="$STUDY_NAME" FOLDS="$FOLDS" STUDY_MODE="$STUDY_MODE" \
+    N_TRIALS="$N_TRIALS" STUDY_NAME="$STUDY_NAME" FOLDS="$FOLDS" STUDY_MODE="$STUDY_MODE" INPUT_MODE="$INPUT_MODE" \
         sbatch optuna_hpo/train_hpo_cmdc_cv_5fold.slurm
     echo "SLURM job submitted! Check logs/optuna*.out for progress."
 else
@@ -40,7 +42,11 @@ else
     mkdir -p logs output_model optuna_studies
 
     CMDC_ROOT="${CMDC_ROOT:-$(pwd)/data/cmdc}"
-    MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct}"
+    if [ "$INPUT_MODE" = "audiotext" ]; then
+        MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct}"
+    else
+        MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct}"
+    fi
     SAVE_ROOT="${SAVE_ROOT:-$(pwd)/output_model/optuna_cmdc_cv_5fold}"
     STORAGE_PATH="${STORAGE_PATH:-optuna_studies}"
     NUM_GPUS="${NUM_GPUS:-4}"
@@ -52,6 +58,7 @@ else
     export FOLDS
     export NUM_GPUS
     export STUDY_MODE
+    export INPUT_MODE
 
     python optuna_hpo/hpo_cv_5fold.py \
         --n-trials "$N_TRIALS" \
@@ -61,6 +68,7 @@ else
         --folds "$FOLDS" \
         --save-root "$SAVE_ROOT" \
         --num-gpus "$NUM_GPUS" \
+        --input-mode "$INPUT_MODE" \
         --study-mode "$STUDY_MODE"
 fi
 
