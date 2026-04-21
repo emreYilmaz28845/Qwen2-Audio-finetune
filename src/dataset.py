@@ -13,6 +13,10 @@ _COLLATE_DEBUG_LIMIT = int(os.environ.get("AUDIOLLM_COLLATE_DEBUG_LIMIT", "6"))
 _collate_debug_count = 0
 
 
+def _is_main_rank():
+    return int(os.environ.get("RANK", "0")) == 0
+
+
 class AudioDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -185,23 +189,26 @@ def collate_fn_qwen2audio(samples, processor):
 
     labels = processed_data["input_ids"].clone()
 
-    prompt_ids = processor(
+    # Build prompt-only inputs with the same audio so the mask includes audio placeholder
+    # tokens and any other processor-added multimodal tokens in the correct positions.
+    prompt_only = processor(
         text=prompt,
+        audio=audio,
+        sampling_rate=processor.feature_extractor.sampling_rate,
         return_tensors="pt",
-        padding=True
+        padding=True,
     )
 
-    prompt_lens = prompt_ids["attention_mask"].sum(dim=1)
-
-    for i, prompt_len in enumerate(prompt_lens):
-        labels[i, :prompt_len] = -100
+    prompt_mask = prompt_only["attention_mask"].bool()
+    prompt_seq_len = prompt_mask.shape[1]
+    labels[:, :prompt_seq_len][prompt_mask] = -100
 
     # padding tokens loss = -100
     labels[processed_data["attention_mask"] == 0] = -100
 
     processed_data["labels"] = labels
 
-    if _collate_debug_count < _COLLATE_DEBUG_LIMIT:
+    if _is_main_rank() and _collate_debug_count < _COLLATE_DEBUG_LIMIT:
         debug_samples = min(len(samples), _COLLATE_DEBUG_LIMIT - _collate_debug_count)
         for i in range(debug_samples):
             label_ids = labels[i][labels[i] != -100]
@@ -218,7 +225,7 @@ def collate_fn_qwen2audio(samples, processor):
             print("[DEBUG collate_fn_qwen2audio]")
             print(f"sample_index={_collate_debug_count + 1}")
             print(f"target={target[i]!r}")
-            print(f"prompt_len={int(prompt_lens[i].item())}")
+            print(f"prompt_mask_tokens={int(prompt_mask[i].sum().item())}")
             print(f"prompt={prompt[i]!r}")
             print(f"full_input_decoded={full_text!r}")
             print(f"kept_label_text={kept_label_text!r}")

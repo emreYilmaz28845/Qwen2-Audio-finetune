@@ -5,6 +5,10 @@ import os
 _METRIC_DEBUG_LIMIT = int(os.environ.get("AUDIOLLM_METRIC_DEBUG_LIMIT", "12"))
 _metric_debug_count = 0
 
+
+def _is_main_rank():
+    return int(os.environ.get("RANK", "0")) == 0
+
 # ========================== NEW VERSION (with global statistics accumulation) ==========================
 # This version accumulates true positives, false positives, true negatives, false negatives, total samples, and correct predictions across batches. 
 # The compute_metrics_text_binary function updates these statistics and computes metrics based on the accumulated values.
@@ -143,7 +147,7 @@ def compute_metrics_text_binary_accumulate(processor, logits, labels, global_sta
         yt = map_text(true_text)
         yp = map_text(pred_text)
 
-        if _metric_debug_count < _METRIC_DEBUG_LIMIT:
+        if _is_main_rank() and _metric_debug_count < _METRIC_DEBUG_LIMIT:
             print("[DEBUG compute_metrics_text_binary_accumulate]")
             print(f"sample_index={_metric_debug_count + 1}")
             print(f"true_text={true_text!r}")

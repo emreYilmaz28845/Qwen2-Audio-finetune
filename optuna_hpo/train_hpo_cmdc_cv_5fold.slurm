@@ -42,7 +42,7 @@ export STUDY_MODE="${STUDY_MODE:-cv_mean}" # per_fold or cv_mean
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 N_TRIALS="${N_TRIALS:-20}"
-STUDY_NAME="${STUDY_NAME:-cmdc_$(INPUT_MODE)_$(STUDY_MODE)_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME="${STUDY_NAME:-cmdc_${INPUT_MODE}_${STUDY_MODE}_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
 LOG_FILE="logs/optuna_cmdc_cv_5fold_${TIMESTAMP}.log"
