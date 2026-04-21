@@ -40,6 +40,10 @@ export NUM_GPUS="${NUM_GPUS:-4}"
 export FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
 export STUDY_MODE="${STUDY_MODE:-cv_mean}" # per_fold or cv_mean
 export PYTORCH_ALLOC_CONF=expandable_segments:True
+export AUDIOLLM_ENABLE_COLLATE_DEBUG="${AUDIOLLM_ENABLE_COLLATE_DEBUG:-0}"
+export AUDIOLLM_COLLATE_DEBUG_LIMIT="${AUDIOLLM_COLLATE_DEBUG_LIMIT:-6}"
+export AUDIOLLM_ENABLE_METRIC_DEBUG="${AUDIOLLM_ENABLE_METRIC_DEBUG:-0}"
+export AUDIOLLM_METRIC_DEBUG_LIMIT="${AUDIOLLM_METRIC_DEBUG_LIMIT:-12}"
 
 N_TRIALS="${N_TRIALS:-20}"
 STUDY_NAME="${STUDY_NAME:-cmdc_${INPUT_MODE}_${STUDY_MODE}_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
@@ -59,6 +63,8 @@ echo "Input Mode: $INPUT_MODE" | tee -a "$LOG_FILE"
 echo "Folds: $FOLDS" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Save Root: $SAVE_ROOT" | tee -a "$LOG_FILE"
+echo "Collate Debug: $AUDIOLLM_ENABLE_COLLATE_DEBUG (limit=$AUDIOLLM_COLLATE_DEBUG_LIMIT)" | tee -a "$LOG_FILE"
+echo "Metric Debug: $AUDIOLLM_ENABLE_METRIC_DEBUG (limit=$AUDIOLLM_METRIC_DEBUG_LIMIT)" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 

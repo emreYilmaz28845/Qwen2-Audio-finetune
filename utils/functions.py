@@ -2,6 +2,11 @@ import torch
 import numpy as np
 import os
 
+def _env_flag(name, default="0"):
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+_ENABLE_METRIC_DEBUG = _env_flag("AUDIOLLM_ENABLE_METRIC_DEBUG", "0")
 _METRIC_DEBUG_LIMIT = int(os.environ.get("AUDIOLLM_METRIC_DEBUG_LIMIT", "12"))
 _metric_debug_count = 0
 
@@ -147,7 +152,7 @@ def compute_metrics_text_binary_accumulate(processor, logits, labels, global_sta
         yt = map_text(true_text)
         yp = map_text(pred_text)
 
-        if _is_main_rank() and _metric_debug_count < _METRIC_DEBUG_LIMIT:
+        if _ENABLE_METRIC_DEBUG and _is_main_rank() and _metric_debug_count < _METRIC_DEBUG_LIMIT:
             print("[DEBUG compute_metrics_text_binary_accumulate]")
             print(f"sample_index={_metric_debug_count + 1}")
             print(f"true_text={true_text!r}")

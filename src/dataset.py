@@ -9,6 +9,11 @@ except ImportError:
 import copy
 import soundfile
 
+def _env_flag(name, default="0"):
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+_ENABLE_COLLATE_DEBUG = _env_flag("AUDIOLLM_ENABLE_COLLATE_DEBUG", "0")
 _COLLATE_DEBUG_LIMIT = int(os.environ.get("AUDIOLLM_COLLATE_DEBUG_LIMIT", "6"))
 _collate_debug_count = 0
 
@@ -208,7 +213,7 @@ def collate_fn_qwen2audio(samples, processor):
 
     processed_data["labels"] = labels
 
-    if _is_main_rank() and _collate_debug_count < _COLLATE_DEBUG_LIMIT:
+    if _ENABLE_COLLATE_DEBUG and _is_main_rank() and _collate_debug_count < _COLLATE_DEBUG_LIMIT:
         debug_samples = min(len(samples), _COLLATE_DEBUG_LIMIT - _collate_debug_count)
         for i in range(debug_samples):
             label_ids = labels[i][labels[i] != -100]
