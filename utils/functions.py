@@ -1,5 +1,9 @@
 import torch
 import numpy as np
+import os
+
+_METRIC_DEBUG_LIMIT = int(os.environ.get("AUDIOLLM_METRIC_DEBUG_LIMIT", "12"))
+_metric_debug_count = 0
 
 # ========================== NEW VERSION (with global statistics accumulation) ==========================
 # This version accumulates true positives, false positives, true negatives, false negatives, total samples, and correct predictions across batches. 
@@ -91,6 +95,8 @@ def compute_acc_text(processor, logits, labels):
 # ==========================
 def compute_metrics_text_binary_accumulate(processor, logits, labels, global_stats=None):
     """Only accumulate statistics, do not compute metrics."""
+    global _metric_debug_count
+
     preds = torch.argmax(logits, dim=-1)
     device = labels.device
     
@@ -136,6 +142,17 @@ def compute_metrics_text_binary_accumulate(processor, logits, labels, global_sta
 
         yt = map_text(true_text)
         yp = map_text(pred_text)
+
+        if _metric_debug_count < _METRIC_DEBUG_LIMIT:
+            print("[DEBUG compute_metrics_text_binary_accumulate]")
+            print(f"sample_index={_metric_debug_count + 1}")
+            print(f"true_text={true_text!r}")
+            print(f"pred_text={pred_text!r}")
+            print(f"mapped_true={yt}")
+            print(f"mapped_pred={yp}")
+            print(f"current_stats_before={{'tp': {global_stats['tp']}, 'fp': {global_stats['fp']}, 'fn': {global_stats['fn']}, 'tn': {global_stats['tn']}, 'total': {global_stats['total']}, 'correct': {global_stats['correct']}}}")
+            print("=" * 80)
+            _metric_debug_count += 1
         
         if yt != -1:
             global_stats['total'] += 1

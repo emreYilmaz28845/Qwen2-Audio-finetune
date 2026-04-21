@@ -9,6 +9,9 @@ except ImportError:
 import copy
 import soundfile
 
+_COLLATE_DEBUG_LIMIT = int(os.environ.get("AUDIOLLM_COLLATE_DEBUG_LIMIT", "6"))
+_collate_debug_count = 0
+
 
 class AudioDataset(torch.utils.data.Dataset):
     def __init__(
@@ -166,6 +169,8 @@ class AudioDataset(torch.utils.data.Dataset):
 #     return processed_data
 
 def collate_fn_qwen2audio(samples, processor):
+    global _collate_debug_count
+
     prompt = [s["prompt"] for s in samples]
     audio = [s["audio"] for s in samples]
     target = [s["target"] for s in samples]
@@ -195,6 +200,30 @@ def collate_fn_qwen2audio(samples, processor):
     labels[processed_data["attention_mask"] == 0] = -100
 
     processed_data["labels"] = labels
+
+    if _collate_debug_count < _COLLATE_DEBUG_LIMIT:
+        debug_samples = min(len(samples), _COLLATE_DEBUG_LIMIT - _collate_debug_count)
+        for i in range(debug_samples):
+            label_ids = labels[i][labels[i] != -100]
+            full_text = processor.tokenizer.decode(
+                processed_data["input_ids"][i].tolist(),
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+            kept_label_text = processor.tokenizer.decode(
+                label_ids.tolist(),
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+            print("[DEBUG collate_fn_qwen2audio]")
+            print(f"sample_index={_collate_debug_count + 1}")
+            print(f"target={target[i]!r}")
+            print(f"prompt_len={int(prompt_lens[i].item())}")
+            print(f"prompt={prompt[i]!r}")
+            print(f"full_input_decoded={full_text!r}")
+            print(f"kept_label_text={kept_label_text!r}")
+            print("-" * 80)
+            _collate_debug_count += 1
 
     if "key" in samples[0]:
         processed_data["keys"] = [s["key"] for s in samples]
