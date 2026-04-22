@@ -48,6 +48,7 @@ export AUDIOLLM_ENABLE_GPU_LOG="${AUDIOLLM_ENABLE_GPU_LOG:-1}"
 export AUDIOLLM_GPU_LOG_INTERVAL_SEC="${AUDIOLLM_GPU_LOG_INTERVAL_SEC:-60}"
 
 N_TRIALS="${N_TRIALS:-20}"
+TARGET_TOTAL_TRIALS="${TARGET_TOTAL_TRIALS:-}"
 STUDY_NAME="${STUDY_NAME:-cmdc_${INPUT_MODE}_${STUDY_MODE}_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
@@ -59,6 +60,7 @@ echo "========================================" | tee -a "$LOG_FILE"
 echo "Timestamp: $TIMESTAMP" | tee -a "$LOG_FILE"
 echo "Job ID: $SLURM_JOB_ID" | tee -a "$LOG_FILE"
 echo "Number of CV Trials: $N_TRIALS" | tee -a "$LOG_FILE"
+echo "Target Total Trials: ${TARGET_TOTAL_TRIALS:-disabled}" | tee -a "$LOG_FILE"
 echo "Study Name: $STUDY_NAME" | tee -a "$LOG_FILE"
 echo "Study Mode: $STUDY_MODE" | tee -a "$LOG_FILE"
 echo "Input Mode: $INPUT_MODE" | tee -a "$LOG_FILE"
@@ -114,6 +116,11 @@ stop_gpu_logger() {
 trap stop_gpu_logger EXIT
 start_gpu_logger
 
+TARGET_TOTAL_ARGS=()
+if [ -n "$TARGET_TOTAL_TRIALS" ]; then
+    TARGET_TOTAL_ARGS=(--target-total-trials "$TARGET_TOTAL_TRIALS")
+fi
+
 python optuna_hpo/hpo_cv_5fold.py \
     --n-trials "$N_TRIALS" \
     --study-name "$STUDY_NAME" \
@@ -123,7 +130,8 @@ python optuna_hpo/hpo_cv_5fold.py \
     --save-root "$SAVE_ROOT" \
     --num-gpus "$NUM_GPUS" \
     --input-mode "$INPUT_MODE" \
-    --study-mode "$STUDY_MODE" 2>&1 | tee -a "$LOG_FILE"
+    --study-mode "$STUDY_MODE" \
+    "${TARGET_TOTAL_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
 
 echo "" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"

@@ -361,24 +361,56 @@ def build_single_fold_objective(cmdc_root, fold_name, model_path, save_root, num
     return objective
 
 
-def run_study(study_name, storage_path, summary_label):
+def run_study(study_name, storage_path, summary_label, load_if_exists=True):
     storage = f"sqlite:///{os.path.abspath(storage_path)}/{study_name}.db"
     logger.info("\n%s", "=" * 70)
     logger.info("%s", summary_label)
     logger.info("  Study Name: %s", study_name)
     logger.info("  Storage: %s", storage)
+    logger.info("  Resume Existing Study: %s", load_if_exists)
     logger.info("%s\n", "=" * 70)
 
     study = optuna.create_study(
         study_name=study_name,
         storage=storage,
         direction="maximize",
-        load_if_exists=False,
+        load_if_exists=load_if_exists,
     )
     return study
 
 
-def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus, input_mode):
+def resolve_requested_trials(study, n_trials, target_total_trials=None):
+    if target_total_trials is None:
+        return n_trials
+
+    existing_trial_count = len(study.trials)
+    remaining_trials = max(0, target_total_trials - existing_trial_count)
+    state_counts = Counter(trial.state.name for trial in study.trials)
+
+    logger.info(
+        "Study already has %s recorded trial(s); target total is %s; scheduling %s additional trial(s).",
+        existing_trial_count,
+        target_total_trials,
+        remaining_trials,
+    )
+    if state_counts:
+        logger.info("Existing trial states: %s", dict(sorted(state_counts.items())))
+
+    return remaining_trials
+
+
+def run_optimization(
+    n_trials,
+    study_name,
+    storage_path,
+    cmdc_root,
+    folds,
+    save_root,
+    num_gpus,
+    input_mode,
+    resume=True,
+    target_total_trials=None,
+):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
     validate_audio_fold_configs(cmdc_root, folds, input_mode)
@@ -392,12 +424,15 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
     logger.info("  Save Root: %s", save_root)
+    logger.info("  Resume Existing Study: %s", resume)
+    logger.info("  Target Total Trials: %s", target_total_trials if target_total_trials is not None else "disabled")
     logger.info("%s\n", "=" * 70)
 
     study = run_study(
         study_name=study_name,
         storage_path=storage_path,
         summary_label="Creating cv_mean study",
+        load_if_exists=resume,
     )
 
     objective = build_objective(
@@ -411,7 +446,15 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
 
     results_file = os.path.join(storage_path, f"{study_name}_results.json")
     try:
-        study.optimize(objective, n_trials=n_trials, n_jobs=1)
+        requested_trials = resolve_requested_trials(
+            study,
+            n_trials=n_trials,
+            target_total_trials=target_total_trials,
+        )
+        if requested_trials == 0:
+            logger.info("No additional trials requested; study already meets the target.")
+        else:
+            study.optimize(objective, n_trials=requested_trials, n_jobs=1)
     except KeyboardInterrupt:
         logger.info("Optimization interrupted by user")
     finally:
@@ -449,7 +492,18 @@ def run_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_
     return study, best_trial
 
 
-def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, folds, save_root, num_gpus, input_mode):
+def run_per_fold_optimization(
+    n_trials,
+    study_name,
+    storage_path,
+    cmdc_root,
+    folds,
+    save_root,
+    num_gpus,
+    input_mode,
+    resume=True,
+    target_total_trials=None,
+):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
     validate_audio_fold_configs(cmdc_root, folds, input_mode)
@@ -463,6 +517,8 @@ def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, fol
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
     logger.info("  Save Root: %s", save_root)
+    logger.info("  Resume Existing Study: %s", resume)
+    logger.info("  Target Total Trials Per Fold: %s", target_total_trials if target_total_trials is not None else "disabled")
     logger.info("%s\n", "=" * 70)
 
     model_path = os.environ.get("MODEL_PATH", MODEL_PATH_DEFAULT)
@@ -485,6 +541,7 @@ def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, fol
             study_name=fold_study_name,
             storage_path=storage_path,
             summary_label=f"Creating per_fold study for {fold_name}",
+            load_if_exists=resume,
         )
         objective = build_single_fold_objective(
             cmdc_root=cmdc_root,
@@ -496,7 +553,18 @@ def run_per_fold_optimization(n_trials, study_name, storage_path, cmdc_root, fol
         )
 
         try:
-            study.optimize(objective, n_trials=n_trials, n_jobs=1)
+            requested_trials = resolve_requested_trials(
+                study,
+                n_trials=n_trials,
+                target_total_trials=target_total_trials,
+            )
+            if requested_trials == 0:
+                logger.info(
+                    "Fold %s already meets the target total trials; skipping new optimization steps.",
+                    fold_name,
+                )
+            else:
+                study.optimize(objective, n_trials=requested_trials, n_jobs=1)
         except KeyboardInterrupt:
             logger.info("Optimization interrupted by user during fold %s", fold_name)
             raise
@@ -591,6 +659,16 @@ def main():
         description="Optuna HPO for CMDC text-only training"
     )
     parser.add_argument("--n-trials", type=int, default=20)
+    parser.add_argument(
+        "--target-total-trials",
+        type=int,
+        default=(
+            int(os.environ["TARGET_TOTAL_TRIALS"])
+            if os.environ.get("TARGET_TOTAL_TRIALS")
+            else None
+        ),
+        help="Target total number of recorded trials in the study. When set, only the remaining trials are run.",
+    )
     parser.add_argument("--study-name", type=str, default="cmdc_textonly_cv_hpo")
     parser.add_argument("--storage-path", type=str, default="optuna_studies")
     parser.add_argument("--cmdc-root", type=str, default=os.environ.get("CMDC_ROOT", "Qwen2-Audio-finetune/data/cmdc"))
@@ -608,6 +686,19 @@ def main():
         type=str,
         choices=["cv_mean", "per_fold"],
         default=os.environ.get("STUDY_MODE", "cv_mean"),
+    )
+    parser.add_argument(
+        "--resume",
+        dest="resume",
+        action="store_true",
+        default=os.environ.get("RESUME_STUDY", "1").lower() not in {"0", "false", "no"},
+        help="Resume an existing study with the same name if its DB already exists (default: enabled).",
+    )
+    parser.add_argument(
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="Fail if the study already exists instead of resuming it.",
     )
     args = parser.parse_args()
 
@@ -629,6 +720,8 @@ def main():
             save_root=args.save_root,
             num_gpus=args.num_gpus,
             input_mode=args.input_mode,
+            resume=args.resume,
+            target_total_trials=args.target_total_trials,
         )
     else:
         run_optimization(
@@ -640,6 +733,8 @@ def main():
             save_root=args.save_root,
             num_gpus=args.num_gpus,
             input_mode=args.input_mode,
+            resume=args.resume,
+            target_total_trials=args.target_total_trials,
         )
 
 
