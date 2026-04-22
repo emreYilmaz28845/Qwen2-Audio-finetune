@@ -383,13 +383,15 @@ def resolve_requested_trials(study, n_trials, target_total_trials=None):
     if target_total_trials is None:
         return n_trials
 
-    existing_trial_count = len(study.trials)
-    remaining_trials = max(0, target_total_trials - existing_trial_count)
     state_counts = Counter(trial.state.name for trial in study.trials)
+    completed_trial_count = state_counts.get("COMPLETE", 0)
+    recorded_trial_count = len(study.trials)
+    remaining_trials = max(0, target_total_trials - completed_trial_count)
 
     logger.info(
-        "Study already has %s recorded trial(s); target total is %s; scheduling %s additional trial(s).",
-        existing_trial_count,
+        "Study already has %s completed trial(s) out of %s recorded trial(s); target completed total is %s; scheduling %s additional trial(s).",
+        completed_trial_count,
+        recorded_trial_count,
         target_total_trials,
         remaining_trials,
     )
@@ -425,7 +427,10 @@ def run_optimization(
     logger.info("  Folds: %s", ", ".join(folds))
     logger.info("  Save Root: %s", save_root)
     logger.info("  Resume Existing Study: %s", resume)
-    logger.info("  Target Total Trials: %s", target_total_trials if target_total_trials is not None else "disabled")
+    logger.info(
+        "  Target Total Completed Trials: %s",
+        target_total_trials if target_total_trials is not None else "disabled",
+    )
     logger.info("%s\n", "=" * 70)
 
     study = run_study(
@@ -518,7 +523,10 @@ def run_per_fold_optimization(
     logger.info("  Folds: %s", ", ".join(folds))
     logger.info("  Save Root: %s", save_root)
     logger.info("  Resume Existing Study: %s", resume)
-    logger.info("  Target Total Trials Per Fold: %s", target_total_trials if target_total_trials is not None else "disabled")
+    logger.info(
+        "  Target Total Completed Trials Per Fold: %s",
+        target_total_trials if target_total_trials is not None else "disabled",
+    )
     logger.info("%s\n", "=" * 70)
 
     model_path = os.environ.get("MODEL_PATH", MODEL_PATH_DEFAULT)
@@ -667,7 +675,7 @@ def main():
             if os.environ.get("TARGET_TOTAL_TRIALS")
             else None
         ),
-        help="Target total number of recorded trials in the study. When set, only the remaining trials are run.",
+        help="Target total number of completed trials in the study. When set, only the remaining trials are run.",
     )
     parser.add_argument("--study-name", type=str, default="cmdc_textonly_cv_hpo")
     parser.add_argument("--storage-path", type=str, default="optuna_studies")
