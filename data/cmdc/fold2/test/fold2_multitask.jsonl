@@ -69,8 +69,8 @@
 {"key": "MDD06_Q7", "task": "MDD06_Q7_抑郁症识别", "target": "抑郁"}
 {"key": "MDD06_Q8", "task": "MDD06_Q8_抑郁症识别", "target": "抑郁"}
 {"key": "MDD06_Q9", "task": "MDD06_Q9_抑郁症识别", "target": "抑郁"}
-{"key": "HC01_Q10", "task": "HC01_Q10_抑郁症识别", "target": "非抑郁"}
 {"key": "HC01_Q1", "task": "HC01_Q1_抑郁症识别", "target": "非抑郁"}
+{"key": "HC01_Q10", "task": "HC01_Q10_抑郁症识别", "target": "非抑郁"}
 {"key": "HC01_Q11", "task": "HC01_Q11_抑郁症识别", "target": "非抑郁"}
 {"key": "HC01_Q12", "task": "HC01_Q12_抑郁症识别", "target": "非抑郁"}
 {"key": "HC01_Q2", "task": "HC01_Q2_抑郁症识别", "target": "非抑郁"}
