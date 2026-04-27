@@ -5,6 +5,7 @@ MDD07_Q12 ../Datasets/CMDC/MDD07/Q12.wav
 MDD07_Q2 ../Datasets/CMDC/MDD07/Q2.wav
 MDD07_Q3 ../Datasets/CMDC/MDD07/Q3.wav
 MDD07_Q4 ../Datasets/CMDC/MDD07/Q4.wav
+MDD07_Q5 ../Datasets/CMDC/MDD07/Q5.wav
 MDD07_Q6 ../Datasets/CMDC/MDD07/Q6.wav
 MDD07_Q7 ../Datasets/CMDC/MDD07/Q7.wav
 MDD07_Q8 ../Datasets/CMDC/MDD07/Q8.wav
@@ -31,6 +32,7 @@ MDD09_Q4 ../Datasets/CMDC/MDD09/Q4.wav
 MDD09_Q5 ../Datasets/CMDC/MDD09/Q5.wav
 MDD09_Q6 ../Datasets/CMDC/MDD09/Q6.wav
 MDD09_Q7 ../Datasets/CMDC/MDD09/Q7.wav
+MDD09_Q8 ../Datasets/CMDC/MDD09/Q8.wav
 MDD09_Q9 ../Datasets/CMDC/MDD09/Q9.wav
 MDD10_Q1 ../Datasets/CMDC/MDD10/Q1.wav
 MDD10_Q10 ../Datasets/CMDC/MDD10/Q10.wav
@@ -88,6 +90,7 @@ MDD14_Q6 ../Datasets/CMDC/MDD14/Q6.wav
 MDD14_Q7 ../Datasets/CMDC/MDD14/Q7.wav
 MDD14_Q8 ../Datasets/CMDC/MDD14/Q8.wav
 MDD14_Q9 ../Datasets/CMDC/MDD14/Q9.wav
+MDD15_Q1 ../Datasets/CMDC/MDD15/Q1.wav
 MDD15_Q10 ../Datasets/CMDC/MDD15/Q10.wav
 MDD15_Q11 ../Datasets/CMDC/MDD15/Q11.wav
 MDD15_Q12 ../Datasets/CMDC/MDD15/Q12.wav
@@ -138,6 +141,7 @@ MDD19_Q1 ../Datasets/CMDC/MDD19/Q1.wav
 MDD19_Q10 ../Datasets/CMDC/MDD19/Q10.wav
 MDD19_Q11 ../Datasets/CMDC/MDD19/Q11.wav
 MDD19_Q12 ../Datasets/CMDC/MDD19/Q12.wav
+MDD19_Q2 ../Datasets/CMDC/MDD19/Q2.wav
 MDD19_Q3 ../Datasets/CMDC/MDD19/Q3.wav
 MDD19_Q4 ../Datasets/CMDC/MDD19/Q4.wav
 MDD19_Q5 ../Datasets/CMDC/MDD19/Q5.wav
@@ -156,9 +160,10 @@ MDD20_Q5 ../Datasets/CMDC/MDD20/Q5.wav
 MDD20_Q6 ../Datasets/CMDC/MDD20/Q6.wav
 MDD20_Q7 ../Datasets/CMDC/MDD20/Q7.wav
 MDD20_Q9 ../Datasets/CMDC/MDD20/Q9.wav
+MDD21_Q12 ../Datasets/CMDC/MDD21/Q12.wav
+MDD21_Q1 ../Datasets/CMDC/MDD21/Q1.wav
 MDD21_Q10 ../Datasets/CMDC/MDD21/Q10.wav
 MDD21_Q11 ../Datasets/CMDC/MDD21/Q11.wav
-MDD21_Q12 ../Datasets/CMDC/MDD21/Q12.wav
 MDD21_Q2 ../Datasets/CMDC/MDD21/Q2.wav
 MDD21_Q3 ../Datasets/CMDC/MDD21/Q3.wav
 MDD21_Q4 ../Datasets/CMDC/MDD21/Q4.wav
@@ -198,6 +203,7 @@ MDD24_Q12 ../Datasets/CMDC/MDD24/Q12.wav
 MDD24_Q2 ../Datasets/CMDC/MDD24/Q2.wav
 MDD24_Q3 ../Datasets/CMDC/MDD24/Q3.wav
 MDD24_Q4 ../Datasets/CMDC/MDD24/Q4.wav
+MDD24_Q5 ../Datasets/CMDC/MDD24/Q5.wav
 MDD24_Q6 ../Datasets/CMDC/MDD24/Q6.wav
 MDD24_Q7 ../Datasets/CMDC/MDD24/Q7.wav
 MDD24_Q8 ../Datasets/CMDC/MDD24/Q8.wav
@@ -236,6 +242,7 @@ HC13_Q4 ../Datasets/CMDC/HC13/Q4.wav
 HC13_Q5 ../Datasets/CMDC/HC13/Q5.wav
 HC13_Q6 ../Datasets/CMDC/HC13/Q6.wav
 HC13_Q7 ../Datasets/CMDC/HC13/Q7.wav
+HC13_Q8 ../Datasets/CMDC/HC13/Q8.wav
 HC13_Q9 ../Datasets/CMDC/HC13/Q9.wav
 HC14_Q1 ../Datasets/CMDC/HC14/Q1.wav
 HC14_Q10 ../Datasets/CMDC/HC14/Q10.wav
@@ -357,13 +364,13 @@ HC23_Q6 ../Datasets/CMDC/HC23/Q6.wav
 HC23_Q7 ../Datasets/CMDC/HC23/Q7.wav
 HC23_Q8 ../Datasets/CMDC/HC23/Q8.wav
 HC23_Q9 ../Datasets/CMDC/HC23/Q9.wav
+HC24_Q5 ../Datasets/CMDC/HC24/Q5.wav
 HC24_Q1 ../Datasets/CMDC/HC24/Q1.wav
 HC24_Q11 ../Datasets/CMDC/HC24/Q11.wav
 HC24_Q12 ../Datasets/CMDC/HC24/Q12.wav
 HC24_Q2 ../Datasets/CMDC/HC24/Q2.wav
 HC24_Q3 ../Datasets/CMDC/HC24/Q3.wav
 HC24_Q4 ../Datasets/CMDC/HC24/Q4.wav
-HC24_Q5 ../Datasets/CMDC/HC24/Q5.wav
 HC24_Q6 ../Datasets/CMDC/HC24/Q6.wav
 HC24_Q7 ../Datasets/CMDC/HC24/Q7.wav
 HC24_Q8 ../Datasets/CMDC/HC24/Q8.wav
@@ -437,6 +444,7 @@ HC30_Q4 ../Datasets/CMDC/HC30/Q4.wav
 HC30_Q5 ../Datasets/CMDC/HC30/Q5.wav
 HC30_Q6 ../Datasets/CMDC/HC30/Q6.wav
 HC30_Q7 ../Datasets/CMDC/HC30/Q7.wav
+HC30_Q8 ../Datasets/CMDC/HC30/Q8.wav
 HC30_Q9 ../Datasets/CMDC/HC30/Q9.wav
 HC31_Q1 ../Datasets/CMDC/HC31/Q1.wav
 HC31_Q10 ../Datasets/CMDC/HC31/Q10.wav
@@ -472,6 +480,7 @@ HC33_Q4 ../Datasets/CMDC/HC33/Q4.wav
 HC33_Q5 ../Datasets/CMDC/HC33/Q5.wav
 HC33_Q6 ../Datasets/CMDC/HC33/Q6.wav
 HC33_Q7 ../Datasets/CMDC/HC33/Q7.wav
+HC33_Q8 ../Datasets/CMDC/HC33/Q8.wav
 HC33_Q9 ../Datasets/CMDC/HC33/Q9.wav
 HC34_Q1 ../Datasets/CMDC/HC34/Q1.wav
 HC34_Q10 ../Datasets/CMDC/HC34/Q10.wav
@@ -501,6 +510,7 @@ HC36_Q1 ../Datasets/CMDC/HC36/Q1.wav
 HC36_Q10 ../Datasets/CMDC/HC36/Q10.wav
 HC36_Q11 ../Datasets/CMDC/HC36/Q11.wav
 HC36_Q12 ../Datasets/CMDC/HC36/Q12.wav
+HC36_Q2 ../Datasets/CMDC/HC36/Q2.wav
 HC36_Q3 ../Datasets/CMDC/HC36/Q3.wav
 HC36_Q4 ../Datasets/CMDC/HC36/Q4.wav
 HC36_Q5 ../Datasets/CMDC/HC36/Q5.wav
@@ -563,6 +573,7 @@ HC41_Q4 ../Datasets/CMDC/HC41/Q4.wav
 HC41_Q5 ../Datasets/CMDC/HC41/Q5.wav
 HC41_Q6 ../Datasets/CMDC/HC41/Q6.wav
 HC41_Q7 ../Datasets/CMDC/HC41/Q7.wav
+HC41_Q8 ../Datasets/CMDC/HC41/Q8.wav
 HC42_Q1 ../Datasets/CMDC/HC42/Q1.wav
 HC42_Q10 ../Datasets/CMDC/HC42/Q10.wav
 HC42_Q11 ../Datasets/CMDC/HC42/Q11.wav
@@ -573,6 +584,7 @@ HC42_Q4 ../Datasets/CMDC/HC42/Q4.wav
 HC42_Q5 ../Datasets/CMDC/HC42/Q5.wav
 HC42_Q6 ../Datasets/CMDC/HC42/Q6.wav
 HC42_Q7 ../Datasets/CMDC/HC42/Q7.wav
+HC42_Q8 ../Datasets/CMDC/HC42/Q8.wav
 HC42_Q9 ../Datasets/CMDC/HC42/Q9.wav
 HC43_Q1 ../Datasets/CMDC/HC43/Q1.wav
 HC43_Q10 ../Datasets/CMDC/HC43/Q10.wav
@@ -646,10 +658,10 @@ HC48_Q6 ../Datasets/CMDC/HC48/Q6.wav
 HC48_Q7 ../Datasets/CMDC/HC48/Q7.wav
 HC48_Q8 ../Datasets/CMDC/HC48/Q8.wav
 HC48_Q9 ../Datasets/CMDC/HC48/Q9.wav
+HC49_Q12 ../Datasets/CMDC/HC49/Q12.wav
 HC49_Q1 ../Datasets/CMDC/HC49/Q1.wav
 HC49_Q10 ../Datasets/CMDC/HC49/Q10.wav
 HC49_Q11 ../Datasets/CMDC/HC49/Q11.wav
-HC49_Q12 ../Datasets/CMDC/HC49/Q12.wav
 HC49_Q2 ../Datasets/CMDC/HC49/Q2.wav
 HC49_Q3 ../Datasets/CMDC/HC49/Q3.wav
 HC49_Q4 ../Datasets/CMDC/HC49/Q4.wav
@@ -694,18 +706,3 @@ HC52_Q6 ../Datasets/CMDC/HC52/Q6.wav
 HC52_Q7 ../Datasets/CMDC/HC52/Q7.wav
 HC52_Q8 ../Datasets/CMDC/HC52/Q8.wav
 HC52_Q9 ../Datasets/CMDC/HC52/Q9.wav
-HC13_Q8 ../Datasets/CMDC/HC13/Q8.wav
-HC17_Q5 ../Datasets/CMDC/HC17/Q5.wav
-HC30_Q8 ../Datasets/CMDC/HC30/Q8.wav
-HC33_Q8 ../Datasets/CMDC/HC33/Q8.wav
-HC36_Q2 ../Datasets/CMDC/HC36/Q2.wav
-HC41_Q8 ../Datasets/CMDC/HC41/Q8.wav
-HC42_Q3 ../Datasets/CMDC/HC42/Q3.wav
-HC42_Q8 ../Datasets/CMDC/HC42/Q8.wav
-HC47_Q4 ../Datasets/CMDC/HC47/Q4.wav
-MDD07_Q5 ../Datasets/CMDC/MDD07/Q5.wav
-MDD09_Q8 ../Datasets/CMDC/MDD09/Q8.wav
-MDD15_Q1 ../Datasets/CMDC/MDD15/Q1.wav
-MDD19_Q2 ../Datasets/CMDC/MDD19/Q2.wav
-MDD21_Q1 ../Datasets/CMDC/MDD21/Q1.wav
-MDD24_Q5 ../Datasets/CMDC/MDD24/Q5.wav
