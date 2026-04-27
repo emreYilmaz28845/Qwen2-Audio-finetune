@@ -83,7 +83,7 @@ HC42_Q10 ../Datasets/CMDC/HC42/Q10.wav
 HC42_Q11 ../Datasets/CMDC/HC42/Q11.wav
 HC42_Q12 ../Datasets/CMDC/HC42/Q12.wav
 HC42_Q2 ../Datasets/CMDC/HC42/Q2.wav
-HC42_Q3- ../Datasets/CMDC/HC42/Q3-.wav
+HC42_Q3 ../Datasets/CMDC/HC42/Q3.wav
 HC42_Q4 ../Datasets/CMDC/HC42/Q4.wav
 HC42_Q5 ../Datasets/CMDC/HC42/Q5.wav
 HC42_Q6 ../Datasets/CMDC/HC42/Q6.wav
@@ -144,7 +144,7 @@ HC47_Q11 ../Datasets/CMDC/HC47/Q11.wav
 HC47_Q12 ../Datasets/CMDC/HC47/Q12.wav
 HC47_Q2 ../Datasets/CMDC/HC47/Q2.wav
 HC47_Q3 ../Datasets/CMDC/HC47/Q3.wav
-HC47_Q4- ../Datasets/CMDC/HC47/Q4-.wav
+HC47_Q4 ../Datasets/CMDC/HC47/Q4.wav
 HC47_Q5 ../Datasets/CMDC/HC47/Q5.wav
 HC47_Q6 ../Datasets/CMDC/HC47/Q6.wav
 HC47_Q7 ../Datasets/CMDC/HC47/Q7.wav

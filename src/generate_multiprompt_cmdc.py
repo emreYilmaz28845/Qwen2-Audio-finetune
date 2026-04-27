@@ -9,6 +9,8 @@ PROMPT_TEMPLATE = (
     "情感描述: {emotion}\n"
     "文本转录: {transcript}"
 )
+TASK_SUFFIX = "_抑郁症识别"
+EMOTION_MARKER = "情感描述:"
 
 
 def read_jsonl(path):
@@ -23,46 +25,75 @@ def write_jsonl(path, items):
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
-def read_emotion_labels(label_file):
+def key_from_task(task):
+    if not task.endswith(TASK_SUFFIX):
+        raise ValueError(f"Unexpected task format: {task}")
+    return task[: -len(TASK_SUFFIX)]
+
+
+def extract_emotion_from_prompt(prompt, source_path):
+    for line in prompt.splitlines():
+        if line.startswith(EMOTION_MARKER):
+            return line[len(EMOTION_MARKER):].strip()
+    raise ValueError(f"Prompt in {source_path} is missing '{EMOTION_MARKER}'")
+
+
+def build_emotion_lookup(paper_root):
     emotion_by_key = {}
-    with label_file.open("r", encoding="utf-8") as f:
-        for line_no, line in enumerate(f, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            parts = stripped.split("\t")
-            if len(parts) < 2:
-                raise ValueError(f"{label_file}:{line_no} does not contain a tab-separated label")
-            audio_path = Path(parts[0])
-            dirname = audio_path.parent.name
-            filename = audio_path.stem
-            key = f"{dirname}_{filename}"
-            emotion_by_key[key] = parts[1]
+    for fold_num in range(1, 6):
+        fold_name = f"fold{fold_num}"
+        for split in ("train", "test"):
+            prompt_path = paper_root / fold_name / split / f"{fold_name}_multiprompt.jsonl"
+            for item in read_jsonl(prompt_path):
+                key = key_from_task(item["task"])
+                emotion = extract_emotion_from_prompt(item["prompt"], prompt_path)
+                emotion_by_key[key] = emotion
     return emotion_by_key
 
 
-def read_transcript(text_root, key):
+def read_transcript(dataset_root, key):
     subject, clip = key.split("_", 1)
-    transcript_path = text_root / subject / f"{clip}.txt"
-    if not transcript_path.exists():
-        raise FileNotFoundError(f"Missing transcript for {key}: {transcript_path}")
-    return transcript_path.read_text(encoding="utf-8").strip()
+    candidates = [clip]
+    if clip.endswith("-"):
+        candidates.append(clip[:-1])
+
+    for candidate in candidates:
+        transcript_path = dataset_root / subject / f"{candidate}.txt"
+        if transcript_path.exists():
+            return transcript_path.read_text(encoding="utf-8").strip()
+
+    raise FileNotFoundError(
+        f"Missing transcript for {key}: tried "
+        + ", ".join(str(dataset_root / subject / f'{candidate}.txt') for candidate in candidates)
+    )
 
 
-def build_prompt_items(multitask_items, emotion_by_key, text_root):
+def resolve_emotion(key, emotion_by_key):
+    emotion = emotion_by_key.get(key)
+    if emotion is not None:
+        return emotion
+
+    if key.endswith("-"):
+        return emotion_by_key.get(key[:-1])
+
+    return None
+
+
+def build_prompt_items(multitask_items, emotion_by_key, dataset_root):
     items = []
     missing_emotions = []
     for item in multitask_items:
         key = item["key"]
-        if key not in emotion_by_key:
+        emotion = resolve_emotion(key, emotion_by_key)
+        if emotion is None:
             missing_emotions.append(key)
             continue
-        transcript = read_transcript(text_root, key)
+        transcript = read_transcript(dataset_root, key)
         items.append(
             {
                 "task": item["task"],
                 "prompt": PROMPT_TEMPLATE.format(
-                    emotion=emotion_by_key[key],
+                    emotion=emotion,
                     transcript=transcript,
                 ),
             }
@@ -70,23 +101,26 @@ def build_prompt_items(multitask_items, emotion_by_key, text_root):
 
     if missing_emotions:
         sample = ", ".join(missing_emotions[:5])
-        raise ValueError(f"Missing emotion labels for {len(missing_emotions)} keys, e.g. {sample}")
+        raise ValueError(
+            f"Missing paper emotion descriptions for {len(missing_emotions)} keys, e.g. {sample}"
+        )
 
     return items
 
 
-def generate_all_folds(cmdc_root, emotion_labels_dir, text_root):
+def generate_all_folds(cmdc_root, paper_root, dataset_root):
+    emotion_by_key = build_emotion_lookup(paper_root)
+    print(f"Loaded {len(emotion_by_key)} emotion descriptions from {paper_root}")
+
     for fold_num in range(1, 6):
         fold_name = f"fold{fold_num}"
         for split in ("train", "test"):
             split_dir = cmdc_root / fold_name / split
             multitask_path = split_dir / f"{fold_name}_multitask.jsonl"
-            label_path = emotion_labels_dir / f"{fold_name}_{split}_multiprompt.txt"
             output_path = split_dir / f"{fold_name}_multiprompt.jsonl"
 
             multitask_items = read_jsonl(multitask_path)
-            emotion_by_key = read_emotion_labels(label_path)
-            prompt_items = build_prompt_items(multitask_items, emotion_by_key, text_root)
+            prompt_items = build_prompt_items(multitask_items, emotion_by_key, dataset_root)
 
             if len(prompt_items) != len(multitask_items):
                 raise ValueError(
@@ -100,7 +134,7 @@ def generate_all_folds(cmdc_root, emotion_labels_dir, text_root):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate CMDC multiprompt manifests in canonical multitask order."
+        description="Generate CMDC multiprompt manifests using paper emotion descriptions and live CMDC transcripts."
     )
     parser.add_argument(
         "--cmdc_root",
@@ -109,23 +143,23 @@ def main():
         help="CMDC root containing fold*/train and fold*/test directories.",
     )
     parser.add_argument(
-        "--emotion_labels_dir",
+        "--paper_root",
         type=Path,
-        required=True,
-        help="Directory containing fold*_train_multiprompt.txt and fold*_test_multiprompt.txt.",
+        default=(Path(__file__).resolve().parent / "../data/cmdc-paper").resolve(),
+        help="Paper CMDC root containing fold*/train and fold*/test multiprompt manifests.",
     )
     parser.add_argument(
-        "--text_root",
+        "--dataset_root",
         type=Path,
         required=True,
-        help="Root directory containing subject transcript folders like HC01/Q1.txt.",
+        help="Live CMDC dataset root containing subject folders like HC52/Q9.txt.",
     )
     args = parser.parse_args()
 
     generate_all_folds(
         cmdc_root=args.cmdc_root.resolve(),
-        emotion_labels_dir=args.emotion_labels_dir.resolve(),
-        text_root=args.text_root.resolve(),
+        paper_root=args.paper_root.resolve(),
+        dataset_root=args.dataset_root.resolve(),
     )
     print("All CMDC multiprompt manifests generated.")
 
