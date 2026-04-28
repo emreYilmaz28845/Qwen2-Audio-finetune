@@ -78,24 +78,31 @@ class TextOnlyDataset(torch.utils.data.Dataset):
 
 
 def collate_fn_textonly(samples, tokenizer):
-    prompts = [sample["prompt"] for sample in samples]
-    targets = [sample["target"] for sample in samples]
+    """Collate function for text-only training. Tokenizes prompt+target and masks prompt in labels."""
+    prompts = [s["prompt"] for s in samples]
+    targets = [s["target"] for s in samples]
 
+    # Tokenize full input (prompt + target)
+    full_texts = [p + t for p, t in zip(prompts, targets)]
     processed_data = tokenizer(
-        [prompt + target for prompt, target in zip(prompts, targets)],
+        full_texts,
         return_tensors="pt",
         padding=True,
         truncation=True,
         max_length=2048,
     )
 
+    # Create labels: mask prompt portion with -100
     labels = copy.deepcopy(processed_data["input_ids"])
-    prompt_tokens = tokenizer(prompts, return_tensors="pt", padding=True)
 
-    for index, attention_mask in enumerate(prompt_tokens["attention_mask"]):
-        prompt_len = attention_mask.sum().item()
-        pad_count = (processed_data["input_ids"][index] == tokenizer.pad_token_id).sum().item()
-        labels[index, : prompt_len + pad_count] = -100
+    # Tokenize each prompt individually (no padding) to get exact prompt length
+    for i, prompt in enumerate(prompts):
+        prompt_tokens = tokenizer(prompt, truncation=True, max_length=2048)
+        prompt_len = len(prompt_tokens["input_ids"])
+        labels[i, :prompt_len] = -100
+
+    # Separately mask PAD tokens wherever they appear (right-padding)
+    labels[labels == tokenizer.pad_token_id] = -100
 
     processed_data["labels"] = labels
     return processed_data
