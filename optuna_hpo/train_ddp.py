@@ -411,12 +411,19 @@ def train_textonly_ddp(cfg, trial_name=""):
     dynamic_eval_step = max(1, steps_per_epoch // 10)
 
     if rank == 0:
+        grad_acc_steps = max(1, int(cfg.train.grad_accumulate_step))
+        micro_batch = cfg.train.batch_size * world_size
+        true_eff_batch = micro_batch * grad_acc_steps
+        opt_steps_per_epoch = math.ceil(steps_per_epoch / grad_acc_steps)
+
         logger.info("\n[Dynamic Eval Settings]")
         logger.info("  Total training samples: %s", len(train_dataset))
-        logger.info("  Batch size per GPU: %s", cfg.train.batch_size)
+        logger.info("  Micro-batch per GPU: %s", cfg.train.batch_size)
         logger.info("  World size (GPUs): %s", world_size)
-        logger.info("  Effective batch size: %s", cfg.train.batch_size * world_size)
-        logger.info("  Steps per epoch: %s", steps_per_epoch)
+        logger.info("  Gradient Accumulation steps: %s", grad_acc_steps)
+        logger.info("  TRUE Effective batch size: %s", true_eff_batch)
+        logger.info("  Dataloader steps (Forward passes): %s", steps_per_epoch)
+        logger.info("  Optimizer steps (Weight updates): %s", opt_steps_per_epoch)
         logger.info("  Dynamic eval_step: %s (evaluate ~10x per epoch)", dynamic_eval_step)
         logger.info("")
 
