@@ -546,8 +546,7 @@ def train_audiotext_ddp(cfg, trial_name=""):
         model.print_trainable_parameters()
 
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    optim = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.train.lr)
-    scheduler = _build_scheduler(optim, cfg)
+    
 
     train_dataset = AudioDataset(
         cfg.data.train_data_path,
@@ -595,19 +594,44 @@ def train_audiotext_ddp(cfg, trial_name=""):
         prefetch_factor=cfg.data.prefetch_factor,
     )
 
+    # ==========================================
+    # PASTE THE NEW SCHEDULER LOGIC HERE
+    # ==========================================
+    steps_per_epoch = len(train_dataloader)
+    grad_acc_steps = max(1, int(cfg.train.grad_accumulate_step))
+    opt_steps_per_epoch = math.ceil(steps_per_epoch / grad_acc_steps)
+    
+    true_total_steps = opt_steps_per_epoch * cfg.train.train_epoch
+    true_warmup_steps = max(1, int(0.10 * true_total_steps))
+    
+    cfg.train.total_train_steps = true_total_steps
+    cfg.train.warmup_steps = true_warmup_steps
+
     if rank == 0:
-        reset_peak_memory_stats(cfg.env.device_type, device)
+        logger.info(f"Fixed Scheduler: Total Steps = {true_total_steps}, Warmup = {true_warmup_steps}")
+
+    optim = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.train.lr)
+    scheduler = _build_scheduler(optim, cfg)
+    # ==========================================
+
 
     steps_per_epoch = len(train_dataloader)
     dynamic_eval_step = max(1, steps_per_epoch // 10)
 
     if rank == 0:
+        grad_acc_steps = max(1, int(cfg.train.grad_accumulate_step))
+        micro_batch = cfg.train.batch_size * world_size
+        true_eff_batch = micro_batch * grad_acc_steps
+        opt_steps_per_epoch = math.ceil(steps_per_epoch / grad_acc_steps)
+
         logger.info("\n[Dynamic Eval Settings]")
         logger.info("  Total training samples: %s", len(train_dataset))
-        logger.info("  Batch size per GPU: %s", cfg.train.batch_size)
+        logger.info("  Micro-batch per GPU: %s", cfg.train.batch_size)
         logger.info("  World size (GPUs): %s", world_size)
-        logger.info("  Effective batch size: %s", cfg.train.batch_size * world_size)
-        logger.info("  Steps per epoch: %s", steps_per_epoch)
+        logger.info("  Gradient Accumulation steps: %s", grad_acc_steps)
+        logger.info("  TRUE Effective batch size: %s", true_eff_batch)
+        logger.info("  Dataloader steps (Forward passes): %s", steps_per_epoch)
+        logger.info("  Optimizer steps (Weight updates): %s", opt_steps_per_epoch)
         logger.info("  Dynamic eval_step: %s (evaluate ~10x per epoch)", dynamic_eval_step)
         logger.info("")
 
