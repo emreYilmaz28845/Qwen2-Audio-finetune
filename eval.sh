@@ -8,10 +8,11 @@
 # Usage:
 #   bash eval.sh                     # uses defaults below
 #   bash eval.sh /path/to/best       # evaluate a LoRA checkpoint
-#   bash eval.sh none                # evaluate the base model without LoRA
 # Env switches:
 #   MODEL_FAMILY=audio|text
 #   PROMPT_MODE=full|audiotext|textonly
+#   CHECKPOINT_MODE=auto|full_audio
+#   ADAPTER_PATH=/path/to/audio_adapter_state.pt
 # ============================================================
 
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,7 +21,8 @@ cd "$LOCAL_DIR" || exit 1
 # --- Configurable paths (match train.sh conventions) ---
 PEFT_PATH="${1:-$LOCAL_DIR/output_model/1e-05_20260330_023140/07-15}"
 MODEL_FAMILY="${MODEL_FAMILY:-audio}"
-PROMPT_MODE="${PROMPT_MODE:-full}"
+CHECKPOINT_MODE="${CHECKPOINT_MODE:-auto}"
+ADAPTER_PATH="${ADAPTER_PATH:-}"
 
 DATA_PATH="${DATA_PATH:-$LOCAL_DIR/data/merged/val}"
 SCP_FILENAME="${SCP_FILENAME:-merged.scp}"
@@ -33,14 +35,26 @@ case "$MODEL_FAMILY" in
     audio)
         export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct}"
         EVAL_SCRIPT="evaluate_per_dataset.py"
+        PROMPT_MODE="${PROMPT_MODE:-audiotext}"
         ;;
     text|textonly)
         export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct}"
         EVAL_SCRIPT="evaluate_textonly.py"
+        PROMPT_MODE="${PROMPT_MODE:-textonly}"
         ;;
     *)
         echo "Unsupported MODEL_FAMILY: $MODEL_FAMILY"
         echo "Use MODEL_FAMILY=audio or MODEL_FAMILY=text"
+        exit 1
+        ;;
+esac
+
+case "${MODEL_FAMILY}:${PROMPT_MODE}" in
+    audio:full|audio:audiotext|text:textonly|textonly:textonly)
+        ;;
+    *)
+        echo "Invalid MODEL_FAMILY / PROMPT_MODE combination: ${MODEL_FAMILY} + ${PROMPT_MODE}"
+        echo "Allowed combinations are: audio+full, audio+audiotext, text+textonly"
         exit 1
         ;;
 esac
@@ -69,12 +83,14 @@ echo "  Per-Dataset Evaluation"
 echo "============================================"
 echo "  MODEL_FAMILY : $MODEL_FAMILY"
 echo "  PROMPT_MODE  : $PROMPT_MODE"
+echo "  CHECKPOINT_MODE: $CHECKPOINT_MODE"
 echo "  EVAL_SCRIPT  : $EVAL_SCRIPT"
 echo "  MODEL_PATH : $MODEL_PATH"
-if [[ -z "$PEFT_PATH" || "$PEFT_PATH" == "none" || "$PEFT_PATH" == "null" || "$PEFT_PATH" == "base" || "$PEFT_PATH" == "baseline" ]]; then
-    echo "  PEFT_PATH  : (none - base model)"
+echo "  PEFT_PATH  : $PEFT_PATH"
+if [[ -n "$ADAPTER_PATH" ]]; then
+    echo "  ADAPTER_PATH: $ADAPTER_PATH"
 else
-    echo "  PEFT_PATH  : $PEFT_PATH"
+    echo "  ADAPTER_PATH: (auto)"
 fi
 echo "  DATA_PATH  : $DATA_PATH"
 echo "  PROMPT_PATH: $PROMPT_PATH"
@@ -95,13 +111,17 @@ if [[ "$MODEL_FAMILY" == "audio" ]]; then
     CMD+=(
         --scp_filename "$SCP_FILENAME"
         --task_filename "$TASK_FILENAME"
+        --checkpoint_mode "$CHECKPOINT_MODE"
+        --peft_path "$PEFT_PATH"
     )
+    if [[ -n "$ADAPTER_PATH" ]]; then
+        CMD+=(--adapter_path "$ADAPTER_PATH")
+    fi
 else
     CMD+=(--task_filename "$TASK_FILENAME")
-fi
-
-if [[ -n "$PEFT_PATH" && "$PEFT_PATH" != "none" && "$PEFT_PATH" != "null" && "$PEFT_PATH" != "base" && "$PEFT_PATH" != "baseline" ]]; then
-    CMD+=(--peft_path "$PEFT_PATH")
+    if [[ -n "$PEFT_PATH" && "$PEFT_PATH" != "none" && "$PEFT_PATH" != "null" && "$PEFT_PATH" != "base" && "$PEFT_PATH" != "baseline" ]]; then
+        CMD+=(--peft_path "$PEFT_PATH")
+    fi
 fi
 
 "${CMD[@]}"
