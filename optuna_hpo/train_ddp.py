@@ -179,6 +179,12 @@ def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
     return original_encoder
 
 
+def save_audio_adapter_state(model, save_dir):
+    adapter_state_path = os.path.join(save_dir, "audio_adapter_state.pt")
+    torch.save(model.audio_tower.audio_adapter.state_dict(), adapter_state_path)
+    return adapter_state_path
+
+
 def _setup_run(cfg, trial_name):
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -690,7 +696,9 @@ def train_audiotext_ddp(cfg, trial_name=""):
                         os.makedirs(best_model_path, exist_ok=True)
                         model.module.save_pretrained(best_model_path)
                         processor.save_pretrained(best_model_path)
+                        adapter_state_path = save_audio_adapter_state(model.module, best_model_path)
                         logger.info("[Saved Best Model] -> %s", best_model_path)
+                        logger.info("[Saved Audio Adapter] -> %s", adapter_state_path)
 
                         if wandb_logger:
                             wandb_logger.log(
