@@ -3,7 +3,7 @@ Optuna hyperparameter optimization for single-dataset Qwen training.
 
 Supported datasets:
 - merged
-- daic
+- daic_woz
 - eatd
 
 Supported user-facing mode combinations:
@@ -39,9 +39,9 @@ TEXT_MODEL_PATH_DEFAULT = "/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instr
 AUDIO_MODEL_PATH_DEFAULT = "/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct"
 
 DATASET_MERGED = "merged"
-DATASET_DAIC = "daic"
+DATASET_DAIC_WOZ = "daic_woz"
 DATASET_EATD = "eatd"
-SUPPORTED_DATASETS = {DATASET_MERGED, DATASET_DAIC, DATASET_EATD}
+SUPPORTED_DATASETS = {DATASET_MERGED, DATASET_DAIC_WOZ, DATASET_EATD}
 
 MODEL_FAMILY_TEXT = "text"
 MODEL_FAMILY_AUDIO = "audio"

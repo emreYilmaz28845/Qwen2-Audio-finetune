@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")" || exit 1
 cd .. || exit 1
 
-DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic, eatd
+DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
@@ -21,11 +21,11 @@ case "${MODEL_FAMILY}:${PROMPT_MODE}" in
 esac
 
 case "$DATASET_NAME" in
-    merged|daic|eatd)
+    merged|daic_woz|eatd)
         ;;
     *)
         echo "Unsupported DATASET_NAME: $DATASET_NAME"
-        echo "Use DATASET_NAME=merged, DATASET_NAME=daic, or DATASET_NAME=eatd"
+        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, or DATASET_NAME=eatd"
         exit 1
         ;;
 esac

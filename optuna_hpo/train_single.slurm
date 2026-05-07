@@ -23,7 +23,7 @@ source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5/bin/activate
 cd /gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
 mkdir -p logs output_model
 
-export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic, eatd
+export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
@@ -60,9 +60,9 @@ case "$DATASET_NAME" in
         LOG_DIR_NAME="single_trial_merged"
         OUTPUT_DIR_NAME="single_trial/merged"
         ;;
-    daic)
-        LOG_DIR_NAME="single_trial_daic"
-        OUTPUT_DIR_NAME="single_trial/daic"
+    daic_woz)
+        LOG_DIR_NAME="single_trial_daic_woz"
+        OUTPUT_DIR_NAME="single_trial/daic_woz"
         ;;
     eatd)
         LOG_DIR_NAME="single_trial_eatd"
@@ -70,7 +70,7 @@ case "$DATASET_NAME" in
         ;;
     *)
         echo "Unsupported DATASET_NAME: $DATASET_NAME"
-        echo "Use DATASET_NAME=merged, DATASET_NAME=daic, or DATASET_NAME=eatd"
+        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, or DATASET_NAME=eatd"
         exit 1
         ;;
 esac

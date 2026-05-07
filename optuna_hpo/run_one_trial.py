@@ -7,7 +7,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from optuna_hpo.hpo import (
-    DATASET_DAIC,
+    DATASET_DAIC_WOZ,
     DATASET_EATD,
     DATASET_MERGED,
     MODEL_FAMILY_AUDIO,
@@ -39,7 +39,7 @@ def main():
     parser.add_argument(
         "--dataset-name",
         type=str,
-        choices=[DATASET_MERGED, DATASET_DAIC, DATASET_EATD],
+        choices=[DATASET_MERGED, DATASET_DAIC_WOZ, DATASET_EATD],
         default=os.environ.get("DATASET_NAME", DATASET_MERGED),
     )
     parser.add_argument(

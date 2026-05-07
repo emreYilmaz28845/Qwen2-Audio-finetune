@@ -23,7 +23,7 @@ source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5/bin/activate
 cd /gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
 mkdir -p logs output_model optuna_studies
 
-export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic, eatd
+export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
@@ -65,14 +65,14 @@ case "$DATASET_NAME" in
         LOG_FILE_PREFIX="optuna_merged"
         JOB_FILE_PREFIX="optuna-qwen-optuna-merged"
         ;;
-    daic)
-        DATASET_ROOT_DEFAULT="/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/data/daic"
+    daic_woz)
+        DATASET_ROOT_DEFAULT="/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/data/daic_woz"
         EVAL_SPLIT="val"
-        LOG_DIR_NAME="optuna_daic"
-        STORAGE_DIR_NAME="optuna_daic"
-        OUTPUT_DIR_NAME="optuna_daic_hpo"
-        LOG_FILE_PREFIX="optuna_daic"
-        JOB_FILE_PREFIX="optuna-qwen-optuna-daic"
+        LOG_DIR_NAME="optuna_daic_woz"
+        STORAGE_DIR_NAME="optuna_daic_woz"
+        OUTPUT_DIR_NAME="optuna_daic_woz_hpo"
+        LOG_FILE_PREFIX="optuna_daic_woz"
+        JOB_FILE_PREFIX="optuna-qwen-optuna-daic-woz"
         ;;
     eatd)
         DATASET_ROOT_DEFAULT="/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/data/eatd"
@@ -85,7 +85,7 @@ case "$DATASET_NAME" in
         ;;
     *)
         echo "Unsupported DATASET_NAME: $DATASET_NAME"
-        echo "Use DATASET_NAME=merged, DATASET_NAME=daic, or DATASET_NAME=eatd"
+        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, or DATASET_NAME=eatd"
         exit 1
         ;;
 esac

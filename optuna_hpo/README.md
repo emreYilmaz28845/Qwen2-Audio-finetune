@@ -4,14 +4,14 @@ This folder contains Optuna-based hyperparameter optimization workflows for Qwen
 
 There are two HPO entrypoints:
 
-- `hpo.py`: single-dataset HPO for `merged`, `daic`, or `eatd`
+- `hpo.py`: single-dataset HPO for `merged`, `daic_woz`, or `eatd`
 - `hpo_cv_5fold.py`: CMDC 5-fold HPO with `cv_mean` or `per_fold` study modes
 
 ## User-Facing Modes
 
 The current interface uses:
 
-- `DATASET_NAME=merged|daic|eatd` for `hpo.py`
+- `DATASET_NAME=merged|daic_woz|eatd` for `hpo.py`
 - `MODEL_FAMILY=audio|text`
 - `PROMPT_MODE=full|audiotext|textonly`
 
@@ -68,7 +68,7 @@ python hpo.py \
 ### MN5 Cluster
 
 ```bash
-DATASET_NAME=daic MODEL_FAMILY=text PROMPT_MODE=textonly sbatch train_hpo.slurm
+DATASET_NAME=daic_woz MODEL_FAMILY=text PROMPT_MODE=textonly sbatch train_hpo.slurm
 ```
 
 ### Default Output Layout
@@ -94,7 +94,7 @@ output_model/
     └── full/
 ```
 
-For `DATASET_NAME=daic` or `eatd`, the same structure is used with `optuna_daic` / `optuna_eatd`.
+For `DATASET_NAME=daic_woz` or `eatd`, the same structure is used with `optuna_daic_woz` / `optuna_eatd`.
 
 ## CMDC 5-Fold HPO
 
@@ -172,7 +172,7 @@ python -m json.tool optuna_studies/optuna_merged/*_results.json
 
 ## Notes
 
-- `eatd` uses `train/` and `test/` splits; `merged` and `daic` use `train/` and `val/`
+- `eatd` uses `train/` and `test/` splits; `merged` and `daic_woz` use `train/` and `val/`
 - non-CMDC HPO now derives prompt files from `PROMPT_MODE`
 - CMDC HPO also separates prompt mode from training backend
 - `full` is a prompt variant, not a separate `train_ddp.py` backend mode
