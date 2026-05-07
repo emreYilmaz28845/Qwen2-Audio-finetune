@@ -52,6 +52,10 @@ def default_save_root_for_study_mode(study_mode: str):
     return f"output_model/optuna_cmdc_cv_5fold_{study_mode}"
 
 
+def default_storage_path_for_study_mode(study_mode: str):
+    return f"optuna_studies/optuna_cmdc_cv_5fold_{study_mode}"
+
+
 def normalize_model_family(model_family: str):
     normalized = model_family.strip().lower()
     if normalized == "textonly":
@@ -781,7 +785,7 @@ def main():
         help="Target total number of completed trials in the study. When set, only the remaining trials are run.",
     )
     parser.add_argument("--study-name", type=str, default="cmdc_cv_hpo")
-    parser.add_argument("--storage-path", type=str, default="optuna_studies")
+    parser.add_argument("--storage-path", type=str, default=os.environ.get("STORAGE_PATH"))
     parser.add_argument("--cmdc-root", type=str, default=os.environ.get("CMDC_ROOT", "Qwen2-Audio-finetune/data/cmdc"))
     parser.add_argument("--folds", type=str, default=os.environ.get("FOLDS", "fold1 fold2 fold3 fold4 fold5"))
     parser.add_argument("--save-root", type=str, default=os.environ.get("SAVE_ROOT"))
@@ -844,16 +848,18 @@ def main():
             model_family = MODEL_FAMILY_TEXT
 
     validate_mode_combination(model_family, prompt_mode)
+    storage_path = args.storage_path or default_storage_path_for_study_mode(args.study_mode)
     save_root = args.save_root or default_save_root_for_study_mode(args.study_mode)
     os.environ["MODEL_FAMILY"] = model_family
     os.environ["PROMPT_MODE"] = prompt_mode
     os.environ["INPUT_MODE"] = resolve_launch_input_mode(model_family)
+    os.environ["STORAGE_PATH"] = storage_path
     os.environ["SAVE_ROOT"] = save_root
     if args.study_mode == "per_fold":
         run_per_fold_optimization(
             n_trials=args.n_trials,
             study_name=args.study_name,
-            storage_path=args.storage_path,
+            storage_path=storage_path,
             cmdc_root=args.cmdc_root,
             folds=folds,
             save_root=save_root,
@@ -867,7 +873,7 @@ def main():
         run_optimization(
             n_trials=args.n_trials,
             study_name=args.study_name,
-            storage_path=args.storage_path,
+            storage_path=storage_path,
             cmdc_root=args.cmdc_root,
             folds=folds,
             save_root=save_root,

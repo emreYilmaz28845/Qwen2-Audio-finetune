@@ -2,13 +2,13 @@
 #SBATCH -J qwen-optuna-cmdc-cv
 #SBATCH -A etur92
 #SBATCH -q acc_ehpc
-#SBATCH -t 24:00:00
+#SBATCH -t 72:00:00
 #SBATCH --ntasks=4
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:4
-#SBATCH -o ./logs/optuna-%x-%j.out
-#SBATCH -e ./logs/optuna-%x-%j.err
+#SBATCH -o /dev/null
+#SBATCH -e /dev/null
 #SBATCH --chdir=/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
 
 # =================================
@@ -55,10 +55,11 @@ case "${MODEL_FAMILY}:${PROMPT_MODE}" in
         ;;
 esac
 export CMDC_ROOT="${CMDC_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/data/cmdc}"
-export STORAGE_PATH="${STORAGE_PATH:-optuna_studies}"
 export NUM_GPUS="${NUM_GPUS:-4}"
 export FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
 export STUDY_MODE="${STUDY_MODE:-cv_mean}" # per_fold or cv_mean
+export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
+export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
 export SAVE_ROOT="${SAVE_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export AUDIOLLM_ENABLE_COLLATE_DEBUG="${AUDIOLLM_ENABLE_COLLATE_DEBUG:-0}"
@@ -73,12 +74,20 @@ else
     export INPUT_MODE="${INPUT_MODE:-textonly}"
 fi
 
+mkdir -p "$LOG_DIR" "$STORAGE_PATH" "$SAVE_ROOT"
+
+SLURM_STDOUT_FILE="$LOG_DIR/optuna-qwen-optuna-cmdc-cv-${SLURM_JOB_ID}.out"
+SLURM_STDERR_FILE="$LOG_DIR/optuna-qwen-optuna-cmdc-cv-${SLURM_JOB_ID}.err"
+
+exec > >(tee -a "$SLURM_STDOUT_FILE")
+exec 2> >(tee -a "$SLURM_STDERR_FILE" >&2)
+
 N_TRIALS="${N_TRIALS:-20}"
 TARGET_TOTAL_TRIALS="${TARGET_TOTAL_TRIALS:-}"
 STUDY_NAME="${STUDY_NAME:-cmdc_${MODEL_FAMILY}_${PROMPT_MODE}_${STUDY_MODE}_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
-LOG_FILE="logs/optuna_cmdc_cv_5fold_${TIMESTAMP}.log"
+LOG_FILE="$LOG_DIR/optuna_cmdc_cv_5fold_${TIMESTAMP}.log"
 
 echo "========================================" | tee -a "$LOG_FILE"
 echo "CMDC 5-Fold Cross-Validated Hyperparameter Tuning" | tee -a "$LOG_FILE"
@@ -94,6 +103,8 @@ echo "Prompt Mode: $PROMPT_MODE" | tee -a "$LOG_FILE"
 echo "Launch Input Mode: $INPUT_MODE" | tee -a "$LOG_FILE"
 echo "Folds: $FOLDS" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
+echo "Log Dir: $LOG_DIR" | tee -a "$LOG_FILE"
+echo "Storage Path: $STORAGE_PATH" | tee -a "$LOG_FILE"
 echo "Save Root: $SAVE_ROOT" | tee -a "$LOG_FILE"
 echo "Collate Debug: $AUDIOLLM_ENABLE_COLLATE_DEBUG (limit=$AUDIOLLM_COLLATE_DEBUG_LIMIT)" | tee -a "$LOG_FILE"
 echo "Metric Debug: $AUDIOLLM_ENABLE_METRIC_DEBUG (limit=$AUDIOLLM_METRIC_DEBUG_LIMIT)" | tee -a "$LOG_FILE"
