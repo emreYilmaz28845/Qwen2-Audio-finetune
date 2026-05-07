@@ -490,6 +490,7 @@ def resolve_requested_trials(study, n_trials, target_total_trials=None):
     return remaining_trials
 
 
+# cv_mean study mode: each trial evaluates all folds and uses the mean fold F1 as the objective
 def run_optimization(
     n_trials,
     study_name,
@@ -593,6 +594,7 @@ def run_optimization(
     return study, best_trial
 
 
+# per_fold study mode: each fold gets its own study, and each trial evaluates only that single folds
 def run_per_fold_optimization(
     n_trials,
     study_name,
@@ -803,14 +805,6 @@ def main():
         default=os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY),
     )
     parser.add_argument(
-        "--input-mode",
-        dest="legacy_input_mode",
-        type=str,
-        choices=[PROMPT_MODE_FULL, PROMPT_MODE_AUDIOTEXT, PROMPT_MODE_TEXTONLY],
-        default=os.environ.get("INPUT_MODE"),
-        help="Deprecated alias for --prompt-mode. Prefer --model-family plus --prompt-mode.",
-    )
-    parser.add_argument(
         "--study-mode",
         type=str,
         choices=["cv_mean", "per_fold"],
@@ -840,19 +834,12 @@ def main():
     folds = parse_folds(args.folds)
     prompt_mode = args.prompt_mode
     model_family = normalize_model_family(args.model_family)
-    if args.legacy_input_mode:
-        prompt_mode = args.legacy_input_mode
-        if prompt_mode in {PROMPT_MODE_FULL, PROMPT_MODE_AUDIOTEXT}:
-            model_family = MODEL_FAMILY_AUDIO
-        elif prompt_mode == PROMPT_MODE_TEXTONLY:
-            model_family = MODEL_FAMILY_TEXT
 
     validate_mode_combination(model_family, prompt_mode)
     storage_path = args.storage_path or default_storage_path_for_study_mode(args.study_mode)
     save_root = args.save_root or default_save_root_for_study_mode(args.study_mode)
     os.environ["MODEL_FAMILY"] = model_family
     os.environ["PROMPT_MODE"] = prompt_mode
-    os.environ["INPUT_MODE"] = resolve_launch_input_mode(model_family)
     os.environ["STORAGE_PATH"] = storage_path
     os.environ["SAVE_ROOT"] = save_root
     if args.study_mode == "per_fold":

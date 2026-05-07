@@ -69,9 +69,9 @@ export AUDIOLLM_METRIC_DEBUG_LIMIT="${AUDIOLLM_METRIC_DEBUG_LIMIT:-12}"
 export AUDIOLLM_ENABLE_GPU_LOG="${AUDIOLLM_ENABLE_GPU_LOG:-1}"
 export AUDIOLLM_GPU_LOG_INTERVAL_SEC="${AUDIOLLM_GPU_LOG_INTERVAL_SEC:-60}"
 if [ "$MODEL_FAMILY" = "audio" ]; then
-    export INPUT_MODE="${INPUT_MODE:-audiotext}"
+    LAUNCH_INPUT_MODE="audiotext"
 else
-    export INPUT_MODE="${INPUT_MODE:-textonly}"
+    LAUNCH_INPUT_MODE="textonly"
 fi
 
 mkdir -p "$LOG_DIR" "$STORAGE_PATH" "$SAVE_ROOT"
@@ -100,7 +100,7 @@ echo "Study Name: $STUDY_NAME" | tee -a "$LOG_FILE"
 echo "Study Mode: $STUDY_MODE" | tee -a "$LOG_FILE"
 echo "Model Family: $MODEL_FAMILY" | tee -a "$LOG_FILE"
 echo "Prompt Mode: $PROMPT_MODE" | tee -a "$LOG_FILE"
-echo "Launch Input Mode: $INPUT_MODE" | tee -a "$LOG_FILE"
+echo "Launch Input Mode (derived): $LAUNCH_INPUT_MODE" | tee -a "$LOG_FILE"
 echo "Folds: $FOLDS" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Log Dir: $LOG_DIR" | tee -a "$LOG_FILE"

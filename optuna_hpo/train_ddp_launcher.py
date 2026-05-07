@@ -19,6 +19,12 @@ from config.config import Config
 from optuna_hpo.train_ddp import train_ddp
 
 
+def derive_input_mode(model_family: str):
+    if model_family == "audio":
+        return "audiotext"
+    return "textonly"
+
+
 def main():
     parser = argparse.ArgumentParser(description="DDP Optuna Trial Launcher")
     parser.add_argument("--config-file", type=str, required=True, help="Path to trial config JSON file")
@@ -34,7 +40,8 @@ def main():
     train_data_path = config_data["train_data_path"]
     eval_data_path = config_data["eval_data_path"]
     save_path = config_data["save_path"]
-    input_mode = config_data.get("input_mode", os.environ.get("INPUT_MODE", "textonly"))
+    model_family = os.environ.get("MODEL_FAMILY", "text").strip().lower()
+    input_mode = config_data.get("input_mode", derive_input_mode(model_family))
     
     # Create config for training
     cfg = Config()
