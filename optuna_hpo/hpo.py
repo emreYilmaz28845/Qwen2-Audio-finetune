@@ -122,7 +122,7 @@ def default_study_name(dataset_name: str, model_family: str, prompt_mode: str):
 def dataset_root(dataset_name: str):
     return os.environ.get(
         "DATASET_ROOT",
-        os.path.join("Qwen2-Audio-finetune", "data", dataset_name),
+        os.path.join("data", dataset_name),
     )
 
 
