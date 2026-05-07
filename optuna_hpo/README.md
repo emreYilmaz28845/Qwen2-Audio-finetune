@@ -1,149 +1,178 @@
-# Optuna Hyperparameter Optimization for Qwen2-7B Text-Only Training
+# Optuna Hyperparameter Optimization for Qwen Training
 
-This folder contains a complete setup for hyperparameter optimization using **Optuna** with **4-GPU DDP** training.
+This folder contains Optuna-based hyperparameter optimization workflows for Qwen training with 4-GPU DDP.
 
-## Quick Start
+There are two HPO entrypoints:
 
-### On MN5 Cluster
+- `hpo.py`: single-dataset HPO for `merged`, `daic`, or `eatd`
+- `hpo_cv_5fold.py`: CMDC 5-fold HPO with `cv_mean` or `per_fold` study modes
 
-```bash
-cd optuna_hpo
-./run_hpo.sh 20 my_study_name
-```
+## User-Facing Modes
 
-Or submit SLURM job directly:
+The current interface uses:
 
-```bash
-cd optuna_hpo
-N_TRIALS=20 sbatch train_hpo.slurm
-```
+- `DATASET_NAME=merged|daic|eatd` for `hpo.py`
+- `MODEL_FAMILY=audio|text`
+- `PROMPT_MODE=full|audiotext|textonly`
 
-### Locally (requires 4 GPUs)
+Allowed combinations:
 
-```bash
-cd optuna_hpo
-python hpo.py --n-trials 20 --study-name my_study
-```
+- `audio + full`
+- `audio + audiotext`
+- `text + textonly`
 
-## What's Inside
+`INPUT_MODE` is now treated as an internal training detail. It is derived automatically from `MODEL_FAMILY` and is not meant to be set directly in the non-CMDC flow.
 
-### Core Files
+## Core Files
 
-- **`hpo.py`** - Main Optuna optimization loop (entry point)
-- **`train_ddp.py`** - DDP training function for each trial
-- **`train_ddp_launcher.py`** - Launcher script for torchrun
-- **`train_launcher.py`** - Trial orchestration and torchrun spawner
-- **`train_hpo.slurm`** - SLURM submission script
-- **`run_hpo.sh`** - Quick-start helper script
+- `hpo.py`: single-dataset Optuna optimization loop
+- `hpo_cv_5fold.py`: CMDC 5-fold Optuna optimization loop
+- `train_launcher.py`: writes trial config and launches `torchrun`
+- `train_ddp_launcher.py`: reads trial config and calls `train_ddp(...)`
+- `train_ddp.py`: actual text/audio DDP training logic
+- `train_hpo.slurm`: MN5 submission script for single-dataset HPO
+- `train_hpo_cmdc_cv_5fold.slurm`: MN5 submission script for CMDC 5-fold HPO
+- `run_hpo.sh`: local/cluster helper for single-dataset HPO
+- `run_hpo_cmdc_cv_5fold.sh`: local/cluster helper for CMDC 5-fold HPO
 
 ## Hyperparameters Being Optimized
 
 | Parameter | Search Space | Type |
 |-----------|--------------|------|
-| **Learning Rate** | 1e-6 to 1e-3 | Logarithmic float |
-| **Batch Size** | 1, 2, 4, 8 | Categorical int |
-| **LoRA R** | 8 to 64 | Int (step: 8) |
-| **LoRA Alpha** | 16 to 128 | Int (step: 16) |
+| `lr` | `1e-6` to `1e-3` | Logarithmic float |
+| `batch_size` | `1, 2, 4` | Categorical int |
+| `lora_r` | `8, 12, 16` | Int |
+| `lora_alpha` | `8, 16, 24, 32` | Int |
 
-**Objective**: Maximize validation **F1 score**
+Objective: maximize validation F1.
 
-## Performance Specs
+## Single-Dataset HPO
 
-- **GPUs per trial**: 4 (DDP)
-- **Training time per trial**: ~1-2 hours
-- **Total time for 20 trials**: ~40 hours on 4 GPUs
+### Local
 
-## Output
-
-After optimization completes:
-
+```bash
+cd optuna_hpo
+DATASET_NAME=merged MODEL_FAMILY=audio PROMPT_MODE=audiotext ./run_hpo.sh 20
 ```
+
+You can also run the Python entrypoint directly:
+
+```bash
+python hpo.py \
+  --n-trials 20 \
+  --dataset-name merged \
+  --model-family audio \
+  --prompt-mode audiotext
+```
+
+### MN5 Cluster
+
+```bash
+DATASET_NAME=daic MODEL_FAMILY=text PROMPT_MODE=textonly sbatch train_hpo.slurm
+```
+
+### Default Output Layout
+
+For `DATASET_NAME=merged`:
+
+```text
+logs/
+└── optuna_merged/
+    ├── optuna-qwen-optuna-merged-<jobid>.out
+    ├── optuna-qwen-optuna-merged-<jobid>.err
+    └── optuna_merged_<timestamp>.log
+
 optuna_studies/
-├── qwen2_textonly_hpo_YYYYMMDD.db          # Study database (resumable)
-└── qwen2_textonly_hpo_YYYYMMDD_results.json # Best hyperparameters + all trials
+└── optuna_merged/
+    ├── merged_audio_audiotext_hpo_<timestamp>.db
+    └── merged_audio_audiotext_hpo_<timestamp>_results.json
+
+output_model/
+└── optuna_merged_hpo/
+    ├── textonly/
+    ├── audiotext/
+    └── full/
 ```
 
-Results JSON structure:
-```json
-{
-  "best_trial_number": 5,
-  "best_f1": 0.8642,
-  "best_params": {
-    "lr": 2.5e-5,
-    "batch_size": 4,
-    "lora_r": 32,
-    "lora_alpha": 64
-  },
-  "all_trials": [...]
-}
+For `DATASET_NAME=daic` or `eatd`, the same structure is used with `optuna_daic` / `optuna_eatd`.
+
+## CMDC 5-Fold HPO
+
+CMDC supports two study modes:
+
+- `cv_mean`: one Optuna trial evaluates one parameter set across all folds and optimizes mean fold F1
+- `per_fold`: one Optuna study per fold, each optimizing only that fold
+
+### Local
+
+```bash
+MODEL_FAMILY=audio PROMPT_MODE=audiotext STUDY_MODE=cv_mean ./run_hpo_cmdc_cv_5fold.sh 20
 ```
+
+### MN5 Cluster
+
+```bash
+MODEL_FAMILY=audio PROMPT_MODE=full STUDY_MODE=per_fold sbatch train_hpo_cmdc_cv_5fold.slurm
+```
+
+### Default Output Layout
+
+For `STUDY_MODE=cv_mean`:
+
+```text
+logs/
+└── optuna_cmdc_cv_5fold_cv_mean/
+    ├── optuna-qwen-optuna-cmdc-cv-<jobid>.out
+    ├── optuna-qwen-optuna-cmdc-cv-<jobid>.err
+    └── optuna_cmdc_cv_5fold_<timestamp>.log
+
+optuna_studies/
+└── optuna_cmdc_5fold_cv_mean/
+    ├── cmdc_audio_audiotext_cv_mean_hpo_<timestamp>.db
+    └── cmdc_audio_audiotext_cv_mean_hpo_<timestamp>_results.json
+
+output_model/
+└── optuna_cmdc_5fold_hpo/
+    ├── textonly/
+    ├── audiotext/
+    └── full/
+```
+
+For `STUDY_MODE=per_fold`, replace the folder suffix with `per_fold`.
+
+## How One Trial Runs
+
+Both entrypoints eventually use the same launch chain:
+
+```text
+Optuna objective
+  -> train_launcher.launch_ddp_training(...)
+  -> torchrun train_ddp_launcher.py
+  -> train_ddp(...)
+```
+
+`train_launcher.py` writes a temp JSON config, launches `torchrun`, waits for training to finish, and returns the trial's best F1 back to Optuna.
+
+## Resume Behavior
+
+Studies are resumable because Optuna uses SQLite.
+
+If you rerun with the same `STUDY_NAME` and `STORAGE_PATH`, new trials continue in the same study DB.
 
 ## Monitor Progress
 
+Examples:
+
 ```bash
-# Check SLURM job
 squeue -u your_username | grep optuna
-
-# View live output
-tail -f logs/optuna-*.out
-
-# Check current best
-cat optuna_studies/*_results.json | python -m json.tool
+tail -f logs/optuna_merged/*.out
+tail -f logs/optuna_cmdc_cv_5fold_cv_mean/*.out
+python -m json.tool optuna_studies/optuna_merged/*_results.json
 ```
 
-## Resume Interrupted Runs
+## Notes
 
-Optuna studies are resumable. To continue from where you left off:
-
-```bash
-# Same study name continues trials
-N_TRIALS=30 STUDY_NAME=qwen2_textonly_hpo sbatch optuna_hpo/train_hpo.slurm
-```
-
-## Next Steps
-
-After finding best hyperparameters, retrain with full training time:
-
-```bash
-# From parent directory
-LR=2.5e-5 BATCH_SIZE=4 sbatch train_textonly.slurm
-```
-
-## Configuration
-
-Edit environment variables in `train_hpo.slurm`:
-
-```bash
-export MODEL_PATH="/path/to/Qwen2-7B-Instruct"
-export TRAIN_DATA_PATH="/path/to/train/data"
-export EVAL_DATA_PATH="/path/to/eval/data"
-export SAVE_PATH="/path/to/output"
-export N_TRIALS=20
-```
-
-## Troubleshooting
-
-**Issue**: CUDA out of memory
-- Reduce batch size in config
-- Increase gradient accumulation steps
-- Enable more aggressive gradient checkpointing
-
-**Issue**: Data loading too slow
-- Increase `num_workers` in config
-- Adjust `prefetch_factor`
-
-**Issue**: Did not find results file
-- Check `/tmp/optuna_trial_*_result.json` files
-- Verify training completed successfully in logs
-- Check DDP communication issues
-
-## Key Features
-
-✅ Multi-GPU DDP training (4 GPUs per trial)  
-✅ Resumable optimization (SQLite database)  
-✅ Distributed data sampling  
-✅ Automatic metric aggregation across GPUs  
-✅ Per-trial logging and checkpointing  
-✅ JSON results export  
-✅ Gradient checkpointing for memory efficiency  
-✅ BFloat16 mixed precision training  
+- `eatd` uses `train/` and `test/` splits; `merged` and `daic` use `train/` and `val/`
+- non-CMDC HPO now derives prompt files from `PROMPT_MODE`
+- CMDC HPO also separates prompt mode from training backend
+- `full` is a prompt variant, not a separate `train_ddp.py` backend mode
