@@ -29,6 +29,8 @@ export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
 export NUM_GPUS="${NUM_GPUS:-4}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
+export AUDIOLLM_ENABLE_GPU_LOG="${AUDIOLLM_ENABLE_GPU_LOG:-1}"
+export AUDIOLLM_GPU_LOG_INTERVAL_SEC="${AUDIOLLM_GPU_LOG_INTERVAL_SEC:-60}"
 
 case "$MODEL_FAMILY" in
     audio)
@@ -109,8 +111,52 @@ echo "LoRA R: $LORA_R" | tee -a "$LOG_FILE"
 echo "LoRA Alpha: $LORA_ALPHA" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Save Path: $SAVE_PATH" | tee -a "$LOG_FILE"
+echo "GPU Log: $AUDIOLLM_ENABLE_GPU_LOG (interval=${AUDIOLLM_GPU_LOG_INTERVAL_SEC}s)" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
+
+GPU_LOG_PID=""
+
+start_gpu_logger() {
+    if [ "$AUDIOLLM_ENABLE_GPU_LOG" != "1" ]; then
+        return
+    fi
+
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        echo "[GPU_LOG] nvidia-smi not found, skipping GPU memory logging" | tee -a "$LOG_FILE"
+        return
+    fi
+
+    (
+        while true; do
+            while IFS=, read -r gpu_index mem_used mem_total util_gpu; do
+                gpu_index=$(echo "$gpu_index" | xargs)
+                mem_used=$(echo "$mem_used" | xargs)
+                mem_total=$(echo "$mem_total" | xargs)
+                util_gpu=$(echo "$util_gpu" | xargs)
+
+                if [ -n "$gpu_index" ] && [ -n "$mem_used" ] && [ -n "$mem_total" ]; then
+                    mem_pct=$(awk -v used="$mem_used" -v total="$mem_total" 'BEGIN { if (total > 0) printf "%.1f", (used / total) * 100; else printf "0.0" }')
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [GPU_LOG] gpu=${gpu_index} vram_used_mb=${mem_used} vram_total_mb=${mem_total} vram_used_pct=${mem_pct}% gpu_util_pct=${util_gpu}%" | tee -a "$LOG_FILE"
+                fi
+            done < <(nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits)
+
+            sleep "$AUDIOLLM_GPU_LOG_INTERVAL_SEC"
+        done
+    ) &
+
+    GPU_LOG_PID=$!
+}
+
+stop_gpu_logger() {
+    if [ -n "$GPU_LOG_PID" ] && kill -0 "$GPU_LOG_PID" >/dev/null 2>&1; then
+        kill "$GPU_LOG_PID" >/dev/null 2>&1 || true
+        wait "$GPU_LOG_PID" 2>/dev/null || true
+    fi
+}
+
+trap stop_gpu_logger EXIT
+start_gpu_logger
 
 python optuna_hpo/run_one_trial.py \
     --trial-number "$TRIAL_NUMBER" \
