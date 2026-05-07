@@ -1,5 +1,6 @@
 """
-Optuna Hyperparameter Optimization for Text-Only Qwen2-7B Training
+Optuna Hyperparameter Optimization for Qwen2 Text-Only and Audio-Text Training
+
 
 This package uses Optuna to search for the best hyperparameters:
 - Learning Rate (LR)
@@ -246,7 +247,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Optuna Hyperparameter Optimization for Qwen2-7B Text-Only Training"
+        description="Optuna Hyperparameter Optimization for Qwen2 Text-Only and Audio-Text Training"
     )
     parser.add_argument(
         "--n-trials",

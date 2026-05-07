@@ -27,18 +27,39 @@ source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5/bin/activate
 cd /gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
 mkdir -p logs output_model optuna_studies
 
-export INPUT_MODE="${INPUT_MODE:-audiotext}" # textonly or audiotext
-if [ "$INPUT_MODE" = "audiotext" ]; then
-    export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct}"
-else
-    export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct}"
-fi
+export MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
+export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
+
+case "$MODEL_FAMILY" in
+    audio)
+        export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct}"
+        ;;
+    text|textonly)
+        export MODEL_FAMILY="text"
+        export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct}"
+        ;;
+    *)
+        echo "Unsupported MODEL_FAMILY: $MODEL_FAMILY"
+        echo "Use MODEL_FAMILY=audio or MODEL_FAMILY=text"
+        exit 1
+        ;;
+esac
+
+case "${MODEL_FAMILY}:${PROMPT_MODE}" in
+    audio:full|audio:audiotext|text:textonly)
+        ;;
+    *)
+        echo "Invalid MODEL_FAMILY / PROMPT_MODE combination: ${MODEL_FAMILY} + ${PROMPT_MODE}"
+        echo "Allowed combinations are: audio+full, audio+audiotext, text+textonly"
+        exit 1
+        ;;
+esac
 export CMDC_ROOT="${CMDC_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/data/cmdc}"
-export SAVE_ROOT="${SAVE_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_cmdc_cv_5fold}"
 export STORAGE_PATH="${STORAGE_PATH:-optuna_studies}"
 export NUM_GPUS="${NUM_GPUS:-4}"
 export FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
 export STUDY_MODE="${STUDY_MODE:-cv_mean}" # per_fold or cv_mean
+export SAVE_ROOT="${SAVE_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export AUDIOLLM_ENABLE_COLLATE_DEBUG="${AUDIOLLM_ENABLE_COLLATE_DEBUG:-0}"
 export AUDIOLLM_COLLATE_DEBUG_LIMIT="${AUDIOLLM_COLLATE_DEBUG_LIMIT:-6}"
@@ -46,10 +67,15 @@ export AUDIOLLM_ENABLE_METRIC_DEBUG="${AUDIOLLM_ENABLE_METRIC_DEBUG:-0}"
 export AUDIOLLM_METRIC_DEBUG_LIMIT="${AUDIOLLM_METRIC_DEBUG_LIMIT:-12}"
 export AUDIOLLM_ENABLE_GPU_LOG="${AUDIOLLM_ENABLE_GPU_LOG:-1}"
 export AUDIOLLM_GPU_LOG_INTERVAL_SEC="${AUDIOLLM_GPU_LOG_INTERVAL_SEC:-60}"
+if [ "$MODEL_FAMILY" = "audio" ]; then
+    export INPUT_MODE="${INPUT_MODE:-audiotext}"
+else
+    export INPUT_MODE="${INPUT_MODE:-textonly}"
+fi
 
 N_TRIALS="${N_TRIALS:-20}"
 TARGET_TOTAL_TRIALS="${TARGET_TOTAL_TRIALS:-}"
-STUDY_NAME="${STUDY_NAME:-cmdc_${INPUT_MODE}_${STUDY_MODE}_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME="${STUDY_NAME:-cmdc_${MODEL_FAMILY}_${PROMPT_MODE}_${STUDY_MODE}_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
 LOG_FILE="logs/optuna_cmdc_cv_5fold_${TIMESTAMP}.log"
@@ -63,7 +89,9 @@ echo "Number of CV Trials: $N_TRIALS" | tee -a "$LOG_FILE"
 echo "Target Total Completed Trials: ${TARGET_TOTAL_TRIALS:-disabled}" | tee -a "$LOG_FILE"
 echo "Study Name: $STUDY_NAME" | tee -a "$LOG_FILE"
 echo "Study Mode: $STUDY_MODE" | tee -a "$LOG_FILE"
-echo "Input Mode: $INPUT_MODE" | tee -a "$LOG_FILE"
+echo "Model Family: $MODEL_FAMILY" | tee -a "$LOG_FILE"
+echo "Prompt Mode: $PROMPT_MODE" | tee -a "$LOG_FILE"
+echo "Launch Input Mode: $INPUT_MODE" | tee -a "$LOG_FILE"
 echo "Folds: $FOLDS" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Save Root: $SAVE_ROOT" | tee -a "$LOG_FILE"
@@ -129,7 +157,8 @@ python optuna_hpo/hpo_cv_5fold.py \
     --folds "$FOLDS" \
     --save-root "$SAVE_ROOT" \
     --num-gpus "$NUM_GPUS" \
-    --input-mode "$INPUT_MODE" \
+    --model-family "$MODEL_FAMILY" \
+    --prompt-mode "$PROMPT_MODE" \
     --study-mode "$STUDY_MODE" \
     "${TARGET_TOTAL_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
 

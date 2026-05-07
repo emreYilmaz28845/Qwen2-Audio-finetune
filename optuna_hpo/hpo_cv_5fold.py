@@ -1,5 +1,5 @@
 """
-Optuna hyperparameter optimization for CMDC text-only training.
+Optuna hyperparameter optimization for CMDC cross-validated training.
 
 Supports two study modes:
 - cv_mean: one Optuna trial samples a single hyperparameter set and evaluates
@@ -33,21 +33,74 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-MODEL_PATH_DEFAULT = "/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct"
-INPUT_MODE_TEXTONLY = "textonly"
-INPUT_MODE_AUDIOTEXT = "audiotext"
+TEXT_MODEL_PATH_DEFAULT = "/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct"
+AUDIO_MODEL_PATH_DEFAULT = "/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct"
+
+MODEL_FAMILY_TEXT = "text"
+MODEL_FAMILY_AUDIO = "audio"
+
+PROMPT_MODE_TEXTONLY = "textonly"
+PROMPT_MODE_AUDIOTEXT = "audiotext"
+PROMPT_MODE_FULL = "full"
 
 
 def parse_folds(folds_text: str):
     return [token.strip() for token in folds_text.split() if token.strip()]
 
 
-def get_fold_config(cmdc_root: str, fold_name: str, input_mode: str):
-    prompt_file = (
-        f"{fold_name}_multiprompt_textonly.jsonl"
-        if input_mode == INPUT_MODE_TEXTONLY
-        else f"{fold_name}_multiprompt_audiotext.jsonl"
-    )
+def default_save_root_for_study_mode(study_mode: str):
+    return f"output_model/optuna_cmdc_cv_5fold_{study_mode}"
+
+
+def normalize_model_family(model_family: str):
+    normalized = model_family.strip().lower()
+    if normalized == "textonly":
+        return MODEL_FAMILY_TEXT
+    return normalized
+
+
+def validate_mode_combination(model_family: str, prompt_mode: str):
+    allowed_pairs = {
+        (MODEL_FAMILY_AUDIO, PROMPT_MODE_FULL),
+        (MODEL_FAMILY_AUDIO, PROMPT_MODE_AUDIOTEXT),
+        (MODEL_FAMILY_TEXT, PROMPT_MODE_TEXTONLY),
+    }
+    pair = (model_family, prompt_mode)
+    if pair not in allowed_pairs:
+        raise ValueError(
+            "Invalid MODEL_FAMILY / PROMPT_MODE combination: "
+            f"{model_family} + {prompt_mode}. "
+            "Allowed combinations are: audio+full, audio+audiotext, text+textonly."
+        )
+
+
+def resolve_model_path(model_family: str):
+    env_model_path = os.environ.get("MODEL_PATH")
+    if env_model_path:
+        return env_model_path
+    if model_family == MODEL_FAMILY_AUDIO:
+        return AUDIO_MODEL_PATH_DEFAULT
+    return TEXT_MODEL_PATH_DEFAULT
+
+
+def resolve_launch_input_mode(model_family: str):
+    if model_family == MODEL_FAMILY_AUDIO:
+        return PROMPT_MODE_AUDIOTEXT
+    return PROMPT_MODE_TEXTONLY
+
+
+def get_prompt_file(fold_name: str, prompt_mode: str):
+    if prompt_mode == PROMPT_MODE_TEXTONLY:
+        return f"{fold_name}_multiprompt_textonly.jsonl"
+    if prompt_mode == PROMPT_MODE_AUDIOTEXT:
+        return f"{fold_name}_multiprompt_audiotext.jsonl"
+    if prompt_mode == PROMPT_MODE_FULL:
+        return f"{fold_name}_multiprompt.jsonl"
+    raise ValueError(f"Unsupported prompt_mode: {prompt_mode}")
+
+
+def get_fold_config(cmdc_root: str, fold_name: str, prompt_mode: str):
+    prompt_file = get_prompt_file(fold_name, prompt_mode)
     return {
         "train_data_path": os.path.join(cmdc_root, fold_name, "train"),
         "eval_data_path": os.path.join(cmdc_root, fold_name, "test"),
@@ -107,13 +160,13 @@ def validate_fold_audio_config(fold_name: str, fold_cfg: dict):
     return issues
 
 
-def validate_audio_fold_configs(cmdc_root: str, folds, input_mode: str):
-    if input_mode != INPUT_MODE_AUDIOTEXT:
+def validate_audio_fold_configs(cmdc_root: str, folds, prompt_mode: str, model_family: str):
+    if model_family != MODEL_FAMILY_AUDIO:
         return
 
     all_issues = []
     for fold_name in folds:
-        fold_cfg = get_fold_config(cmdc_root, fold_name, input_mode)
+        fold_cfg = get_fold_config(cmdc_root, fold_name, prompt_mode)
         all_issues.extend(validate_fold_audio_config(fold_name, fold_cfg))
 
     if all_issues:
@@ -171,7 +224,18 @@ def write_results_file(results_file, results):
         json.dump(results, handle, indent=2, ensure_ascii=False)
 
 
-def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_root, num_gpus, input_mode):
+def run_fold_trial(
+    trial,
+    trial_params,
+    fold_name,
+    fold_cfg,
+    model_path,
+    save_root,
+    num_gpus,
+    launch_input_mode,
+    model_family,
+    prompt_mode,
+):
     previous_env = {
         "TRAIN_PROMPT_FILE": os.environ.get("TRAIN_PROMPT_FILE"),
         "EVAL_PROMPT_FILE": os.environ.get("EVAL_PROMPT_FILE"),
@@ -179,6 +243,8 @@ def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_ro
         "EVAL_TASK_FILE": os.environ.get("EVAL_TASK_FILE"),
         "TRAIN_SCP_FILE": os.environ.get("TRAIN_SCP_FILE"),
         "EVAL_SCP_FILE": os.environ.get("EVAL_SCP_FILE"),
+        "MODEL_FAMILY": os.environ.get("MODEL_FAMILY"),
+        "PROMPT_MODE": os.environ.get("PROMPT_MODE"),
     }
 
     os.environ["TRAIN_PROMPT_FILE"] = fold_cfg["train_prompt_file"]
@@ -187,6 +253,8 @@ def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_ro
     os.environ["EVAL_TASK_FILE"] = fold_cfg["eval_task_file"]
     os.environ["TRAIN_SCP_FILE"] = fold_cfg["train_scp_file"]
     os.environ["EVAL_SCP_FILE"] = fold_cfg["eval_scp_file"]
+    os.environ["MODEL_FAMILY"] = model_family
+    os.environ["PROMPT_MODE"] = prompt_mode
 
     fold_save_path = os.path.join(save_root, f"trial_{trial.number:03d}", fold_name)
 
@@ -198,7 +266,7 @@ def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_ro
             train_data_path=fold_cfg["train_data_path"],
             eval_data_path=fold_cfg["eval_data_path"],
             save_path=fold_save_path,
-            input_mode=input_mode,
+            input_mode=launch_input_mode,
             num_gpus=num_gpus,
         )
     finally:
@@ -217,11 +285,15 @@ def run_fold_trial(trial, trial_params, fold_name, fold_cfg, model_path, save_ro
         "save_path": fold_save_path,
         "train_data_path": fold_cfg["train_data_path"],
         "eval_data_path": fold_cfg["eval_data_path"],
-        "input_mode": input_mode,
+        "model_family": model_family,
+        "prompt_mode": prompt_mode,
+        "launch_input_mode": launch_input_mode,
     }
 
 
-def build_objective(cmdc_root, folds, model_path, save_root, num_gpus, input_mode):
+def build_objective(cmdc_root, folds, model_path, save_root, num_gpus, model_family, prompt_mode):
+    launch_input_mode = resolve_launch_input_mode(model_family)
+
     def objective(trial: optuna.Trial):
         trial_params = sample_trial_params(trial)
         log_trial_header(
@@ -234,7 +306,7 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus, input_mod
         fold_results = []
         try:
             for fold_name in folds:
-                fold_cfg = get_fold_config(cmdc_root, fold_name, input_mode)
+                fold_cfg = get_fold_config(cmdc_root, fold_name, prompt_mode)
                 logger.info("Trial %s | Running %s", trial.number, fold_name)
                 fold_result = run_fold_trial(
                     trial=trial,
@@ -244,7 +316,9 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus, input_mod
                     model_path=model_path,
                     save_root=save_root,
                     num_gpus=num_gpus,
-                    input_mode=input_mode,
+                    launch_input_mode=launch_input_mode,
+                    model_family=model_family,
+                    prompt_mode=prompt_mode,
                 )
                 fold_results.append(fold_result)
                 logger.info(
@@ -310,8 +384,17 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus, input_mod
     return objective
 
 
-def build_single_fold_objective(cmdc_root, fold_name, model_path, save_root, num_gpus, input_mode):
-    fold_cfg = get_fold_config(cmdc_root, fold_name, input_mode)
+def build_single_fold_objective(
+    cmdc_root,
+    fold_name,
+    model_path,
+    save_root,
+    num_gpus,
+    model_family,
+    prompt_mode,
+):
+    fold_cfg = get_fold_config(cmdc_root, fold_name, prompt_mode)
+    launch_input_mode = resolve_launch_input_mode(model_family)
 
     def objective(trial: optuna.Trial):
         trial_params = sample_trial_params(trial)
@@ -332,7 +415,9 @@ def build_single_fold_objective(cmdc_root, fold_name, model_path, save_root, num
                 model_path=model_path,
                 save_root=save_root,
                 num_gpus=num_gpus,
-                input_mode=input_mode,
+                launch_input_mode=launch_input_mode,
+                model_family=model_family,
+                prompt_mode=prompt_mode,
             )
         except Exception as exc:
             logger.error("Trial %s failed during %s evaluation: %s", trial.number, fold_name, exc)
@@ -409,19 +494,23 @@ def run_optimization(
     folds,
     save_root,
     num_gpus,
-    input_mode,
+    model_family,
+    prompt_mode,
     resume=True,
     target_total_trials=None,
 ):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
-    validate_audio_fold_configs(cmdc_root, folds, input_mode)
+    validate_mode_combination(model_family, prompt_mode)
+    validate_audio_fold_configs(cmdc_root, folds, prompt_mode, model_family)
 
     logger.info("\n%s", "=" * 70)
     logger.info("Starting Optuna optimization")
     logger.info("  Study Mode: cv_mean")
     logger.info("  Study Name: %s", study_name)
-    logger.info("  Input Mode: %s", input_mode)
+    logger.info("  Model Family: %s", model_family)
+    logger.info("  Prompt Mode: %s", prompt_mode)
+    logger.info("  Launch Input Mode: %s", resolve_launch_input_mode(model_family))
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
@@ -443,10 +532,11 @@ def run_optimization(
     objective = build_objective(
         cmdc_root=cmdc_root,
         folds=folds,
-        model_path=os.environ.get("MODEL_PATH", MODEL_PATH_DEFAULT),
+        model_path=resolve_model_path(model_family),
         save_root=save_root,
         num_gpus=num_gpus,
-        input_mode=input_mode,
+        model_family=model_family,
+        prompt_mode=prompt_mode,
     )
 
     results_file = os.path.join(storage_path, f"{study_name}_results.json")
@@ -483,7 +573,9 @@ def run_optimization(
             "n_completed": len(completed_trials),
             "folds": folds,
             "cmdc_root": cmdc_root,
-            "input_mode": input_mode,
+            "model_family": model_family,
+            "prompt_mode": prompt_mode,
+            "launch_input_mode": resolve_launch_input_mode(model_family),
             "best_trial_number": best_trial.number if best_trial is not None else None,
             "best_mean_f1": float(best_trial.value) if best_trial is not None else None,
             "best_params": dict(best_trial.params) if best_trial is not None else None,
@@ -505,19 +597,23 @@ def run_per_fold_optimization(
     folds,
     save_root,
     num_gpus,
-    input_mode,
+    model_family,
+    prompt_mode,
     resume=True,
     target_total_trials=None,
 ):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
-    validate_audio_fold_configs(cmdc_root, folds, input_mode)
+    validate_mode_combination(model_family, prompt_mode)
+    validate_audio_fold_configs(cmdc_root, folds, prompt_mode, model_family)
 
     logger.info("\n%s", "=" * 70)
     logger.info("Starting Optuna optimization")
     logger.info("  Study Mode: per_fold")
     logger.info("  Base Study Name: %s", study_name)
-    logger.info("  Input Mode: %s", input_mode)
+    logger.info("  Model Family: %s", model_family)
+    logger.info("  Prompt Mode: %s", prompt_mode)
+    logger.info("  Launch Input Mode: %s", resolve_launch_input_mode(model_family))
     logger.info("  Trials Per Fold: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
@@ -529,7 +625,7 @@ def run_per_fold_optimization(
     )
     logger.info("%s\n", "=" * 70)
 
-    model_path = os.environ.get("MODEL_PATH", MODEL_PATH_DEFAULT)
+    model_path = resolve_model_path(model_family)
     fold_summaries = []
 
     for fold_name in folds:
@@ -557,7 +653,8 @@ def run_per_fold_optimization(
             model_path=model_path,
             save_root=fold_save_root,
             num_gpus=num_gpus,
-            input_mode=input_mode,
+            model_family=model_family,
+            prompt_mode=prompt_mode,
         )
 
         try:
@@ -589,7 +686,9 @@ def run_per_fold_optimization(
             "base_study_name": study_name,
             "study_mode": "per_fold",
             "fold": fold_name,
-            "input_mode": input_mode,
+            "model_family": model_family,
+            "prompt_mode": prompt_mode,
+            "launch_input_mode": resolve_launch_input_mode(model_family),
             "n_trials": len(study.trials),
             "n_completed": len(completed_trials),
             "cmdc_root": cmdc_root,
@@ -611,7 +710,9 @@ def run_per_fold_optimization(
             "db_path": storage_file,
             "results_path": os.path.abspath(results_file),
             "save_root": os.path.abspath(fold_save_root),
-            "input_mode": input_mode,
+            "model_family": model_family,
+            "prompt_mode": prompt_mode,
+            "launch_input_mode": resolve_launch_input_mode(model_family),
             "n_trials": len(study.trials),
             "n_completed": len(completed_trials),
             "best_trial_number": best_trial.number if best_trial is not None else None,
@@ -641,7 +742,9 @@ def run_per_fold_optimization(
         "study_name": study_name,
         "study_mode": "per_fold",
         "folds": folds,
-        "input_mode": input_mode,
+        "model_family": model_family,
+        "prompt_mode": prompt_mode,
+        "launch_input_mode": resolve_launch_input_mode(model_family),
         "trials_per_fold": n_trials,
         "cmdc_root": cmdc_root,
         "save_root": os.path.abspath(save_root),
@@ -664,7 +767,7 @@ def run_per_fold_optimization(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Optuna HPO for CMDC text-only training"
+        description="Optuna HPO for CMDC cross-validated Qwen training"
     )
     parser.add_argument("--n-trials", type=int, default=20)
     parser.add_argument(
@@ -677,17 +780,31 @@ def main():
         ),
         help="Target total number of completed trials in the study. When set, only the remaining trials are run.",
     )
-    parser.add_argument("--study-name", type=str, default="cmdc_textonly_cv_hpo")
+    parser.add_argument("--study-name", type=str, default="cmdc_cv_hpo")
     parser.add_argument("--storage-path", type=str, default="optuna_studies")
     parser.add_argument("--cmdc-root", type=str, default=os.environ.get("CMDC_ROOT", "Qwen2-Audio-finetune/data/cmdc"))
     parser.add_argument("--folds", type=str, default=os.environ.get("FOLDS", "fold1 fold2 fold3 fold4 fold5"))
-    parser.add_argument("--save-root", type=str, default=os.environ.get("SAVE_ROOT", "output_model/optuna_cmdc_cv_5fold"))
+    parser.add_argument("--save-root", type=str, default=os.environ.get("SAVE_ROOT"))
     parser.add_argument("--num-gpus", type=int, default=int(os.environ.get("NUM_GPUS", "4")))
     parser.add_argument(
-        "--input-mode",
+        "--model-family",
         type=str,
-        choices=[INPUT_MODE_TEXTONLY, INPUT_MODE_AUDIOTEXT],
-        default=os.environ.get("INPUT_MODE", INPUT_MODE_TEXTONLY),
+        choices=[MODEL_FAMILY_AUDIO, MODEL_FAMILY_TEXT],
+        default=normalize_model_family(os.environ.get("MODEL_FAMILY", MODEL_FAMILY_TEXT)),
+    )
+    parser.add_argument(
+        "--prompt-mode",
+        type=str,
+        choices=[PROMPT_MODE_FULL, PROMPT_MODE_AUDIOTEXT, PROMPT_MODE_TEXTONLY],
+        default=os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY),
+    )
+    parser.add_argument(
+        "--input-mode",
+        dest="legacy_input_mode",
+        type=str,
+        choices=[PROMPT_MODE_FULL, PROMPT_MODE_AUDIOTEXT, PROMPT_MODE_TEXTONLY],
+        default=os.environ.get("INPUT_MODE"),
+        help="Deprecated alias for --prompt-mode. Prefer --model-family plus --prompt-mode.",
     )
     parser.add_argument(
         "--study-mode",
@@ -717,7 +834,21 @@ def main():
     logger.info("Total VRAM: %.2f GB", torch.cuda.get_device_properties(0).total_memory / 1e9)
 
     folds = parse_folds(args.folds)
-    os.environ["INPUT_MODE"] = args.input_mode
+    prompt_mode = args.prompt_mode
+    model_family = normalize_model_family(args.model_family)
+    if args.legacy_input_mode:
+        prompt_mode = args.legacy_input_mode
+        if prompt_mode in {PROMPT_MODE_FULL, PROMPT_MODE_AUDIOTEXT}:
+            model_family = MODEL_FAMILY_AUDIO
+        elif prompt_mode == PROMPT_MODE_TEXTONLY:
+            model_family = MODEL_FAMILY_TEXT
+
+    validate_mode_combination(model_family, prompt_mode)
+    save_root = args.save_root or default_save_root_for_study_mode(args.study_mode)
+    os.environ["MODEL_FAMILY"] = model_family
+    os.environ["PROMPT_MODE"] = prompt_mode
+    os.environ["INPUT_MODE"] = resolve_launch_input_mode(model_family)
+    os.environ["SAVE_ROOT"] = save_root
     if args.study_mode == "per_fold":
         run_per_fold_optimization(
             n_trials=args.n_trials,
@@ -725,9 +856,10 @@ def main():
             storage_path=args.storage_path,
             cmdc_root=args.cmdc_root,
             folds=folds,
-            save_root=args.save_root,
+            save_root=save_root,
             num_gpus=args.num_gpus,
-            input_mode=args.input_mode,
+            model_family=model_family,
+            prompt_mode=prompt_mode,
             resume=args.resume,
             target_total_trials=args.target_total_trials,
         )
@@ -738,9 +870,10 @@ def main():
             storage_path=args.storage_path,
             cmdc_root=args.cmdc_root,
             folds=folds,
-            save_root=args.save_root,
+            save_root=save_root,
             num_gpus=args.num_gpus,
-            input_mode=args.input_mode,
+            model_family=model_family,
+            prompt_mode=prompt_mode,
             resume=args.resume,
             target_total_trials=args.target_total_trials,
         )
