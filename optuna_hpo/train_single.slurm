@@ -18,7 +18,7 @@ module purge
 module load bsc/1.0
 module load miniforge/24.3.0-0
 
-source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5/bin/activate
+source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5_rebuilt/bin/activate
 
 cd /gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
 mkdir -p logs output_model
