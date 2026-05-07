@@ -26,6 +26,7 @@ mkdir -p logs output_model optuna_studies
 export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic, eatd
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
+export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
 
 case "$MODEL_FAMILY" in
     audio)
@@ -105,13 +106,27 @@ case "$PROMPT_MODE" in
         ;;
 esac
 
+case "$TASK_VARIANT" in
+    default)
+        TASK_FILE="${DATASET_NAME}_multitask.jsonl"
+        ;;
+    filtered)
+        TASK_FILE="${DATASET_NAME}_multitask_filtered.jsonl"
+        ;;
+    *)
+        echo "Unsupported TASK_VARIANT: $TASK_VARIANT"
+        echo "Use TASK_VARIANT=default or TASK_VARIANT=filtered"
+        exit 1
+        ;;
+esac
+
 export DATASET_ROOT="${DATASET_ROOT:-$DATASET_ROOT_DEFAULT}"
 export TRAIN_DATA_PATH="${TRAIN_DATA_PATH:-$DATASET_ROOT/train}"
 export EVAL_DATA_PATH="${EVAL_DATA_PATH:-$DATASET_ROOT/$EVAL_SPLIT}"
 export TRAIN_PROMPT_FILE="${TRAIN_PROMPT_FILE:-$PROMPT_FILE}"
 export EVAL_PROMPT_FILE="${EVAL_PROMPT_FILE:-$PROMPT_FILE}"
-export TRAIN_TASK_FILE="${TRAIN_TASK_FILE:-${DATASET_NAME}_multitask.jsonl}"
-export EVAL_TASK_FILE="${EVAL_TASK_FILE:-${DATASET_NAME}_multitask.jsonl}"
+export TRAIN_TASK_FILE="${TRAIN_TASK_FILE:-$TASK_FILE}"
+export EVAL_TASK_FILE="${EVAL_TASK_FILE:-$TASK_FILE}"
 export TRAIN_SCP_FILE="${TRAIN_SCP_FILE:-${DATASET_NAME}.scp}"
 export EVAL_SCP_FILE="${EVAL_SCP_FILE:-${DATASET_NAME}.scp}"
 export WAV_TYPE="${WAV_TYPE:-wav}"
@@ -145,6 +160,7 @@ echo "Study Name: $STUDY_NAME" | tee -a "$LOG_FILE"
 echo "Dataset Name: $DATASET_NAME" | tee -a "$LOG_FILE"
 echo "Model Family: $MODEL_FAMILY" | tee -a "$LOG_FILE"
 echo "Prompt Mode: $PROMPT_MODE" | tee -a "$LOG_FILE"
+echo "Task Variant: $TASK_VARIANT" | tee -a "$LOG_FILE"
 echo "Launch Input Mode (derived): $LAUNCH_INPUT_MODE" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Train Data Path: $TRAIN_DATA_PATH" | tee -a "$LOG_FILE"
@@ -164,7 +180,8 @@ python optuna_hpo/hpo.py \
     --save-root "$SAVE_PATH" \
     --dataset-name "$DATASET_NAME" \
     --model-family "$MODEL_FAMILY" \
-    --prompt-mode "$PROMPT_MODE" 2>&1 | tee -a "$LOG_FILE"
+    --prompt-mode "$PROMPT_MODE" \
+    --task-variant "$TASK_VARIANT" 2>&1 | tee -a "$LOG_FILE"
 
 echo "" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"

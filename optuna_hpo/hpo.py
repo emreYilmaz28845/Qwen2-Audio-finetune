@@ -50,6 +50,9 @@ PROMPT_MODE_TEXTONLY = "textonly"
 PROMPT_MODE_AUDIOTEXT = "audiotext"
 PROMPT_MODE_FULL = "full"
 
+TASK_VARIANT_DEFAULT = "default"
+TASK_VARIANT_FILTERED = "filtered"
+
 
 @dataclass
 class DatasetConfig:
@@ -136,7 +139,15 @@ def get_prompt_filename(dataset_name: str, prompt_mode: str):
     raise ValueError(f"Unsupported prompt_mode: {prompt_mode}")
 
 
-def get_dataset_config(dataset_name: str, prompt_mode: str):
+def get_task_filename(dataset_name: str, task_variant: str):
+    if task_variant == TASK_VARIANT_DEFAULT:
+        return f"{dataset_name}_multitask.jsonl"
+    if task_variant == TASK_VARIANT_FILTERED:
+        return f"{dataset_name}_multitask_filtered.jsonl"
+    raise ValueError(f"Unsupported task_variant: {task_variant}")
+
+
+def get_dataset_config(dataset_name: str, prompt_mode: str, task_variant: str):
     if dataset_name not in SUPPORTED_DATASETS:
         raise ValueError(
             f"Unsupported dataset_name={dataset_name!r}. Expected one of {sorted(SUPPORTED_DATASETS)}."
@@ -144,6 +155,7 @@ def get_dataset_config(dataset_name: str, prompt_mode: str):
 
     root = dataset_root(dataset_name)
     prompt_file = get_prompt_filename(dataset_name, prompt_mode)
+    task_file = get_task_filename(dataset_name, task_variant)
     train_split = "train"
     eval_split = "val"
     if dataset_name == DATASET_EATD:
@@ -155,8 +167,8 @@ def get_dataset_config(dataset_name: str, prompt_mode: str):
         eval_data_path=os.path.join(root, eval_split),
         train_prompt_file=prompt_file,
         eval_prompt_file=prompt_file,
-        train_task_file=f"{dataset_name}_multitask.jsonl",
-        eval_task_file=f"{dataset_name}_multitask.jsonl",
+        train_task_file=task_file,
+        eval_task_file=task_file,
         train_scp_file=f"{dataset_name}.scp",
         eval_scp_file=f"{dataset_name}.scp",
     )
@@ -225,10 +237,11 @@ def run_optimization(
     dataset_name=DATASET_MERGED,
     model_family=MODEL_FAMILY_TEXT,
     prompt_mode=PROMPT_MODE_TEXTONLY,
+    task_variant=TASK_VARIANT_DEFAULT,
     save_root=None,
 ):
     validate_mode_combination(model_family, prompt_mode)
-    dataset_cfg = get_dataset_config(dataset_name, prompt_mode)
+    dataset_cfg = get_dataset_config(dataset_name, prompt_mode, task_variant)
     apply_dataset_env(dataset_cfg)
 
     launch_input_mode = resolve_launch_input_mode(model_family)
@@ -240,6 +253,7 @@ def run_optimization(
 
     os.environ["MODEL_FAMILY"] = model_family
     os.environ["PROMPT_MODE"] = prompt_mode
+    os.environ["TASK_VARIANT"] = task_variant
     os.environ["STORAGE_PATH"] = storage_path
     os.environ["SAVE_PATH"] = save_root
     os.environ["DATASET_NAME"] = dataset_name
@@ -254,6 +268,7 @@ def run_optimization(
     logger.info("  Study Name: %s", study_name)
     logger.info("  Model Family: %s", model_family)
     logger.info("  Prompt Mode: %s", prompt_mode)
+    logger.info("  Task Variant: %s", task_variant)
     logger.info("  Launch Input Mode: %s", launch_input_mode)
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  Storage: %s", storage)
@@ -308,6 +323,7 @@ def run_optimization(
         "dataset_name": dataset_name,
         "model_family": model_family,
         "prompt_mode": prompt_mode,
+        "task_variant": task_variant,
         "launch_input_mode": launch_input_mode,
         "n_trials": len(study.trials),
         "n_completed": len(completed_trials),
@@ -376,6 +392,12 @@ if __name__ == "__main__":
         choices=[PROMPT_MODE_FULL, PROMPT_MODE_AUDIOTEXT, PROMPT_MODE_TEXTONLY],
         default=os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY),
     )
+    parser.add_argument(
+        "--task-variant",
+        type=str,
+        choices=[TASK_VARIANT_DEFAULT, TASK_VARIANT_FILTERED],
+        default=os.environ.get("TASK_VARIANT", TASK_VARIANT_DEFAULT),
+    )
 
     args = parser.parse_args()
 
@@ -392,5 +414,6 @@ if __name__ == "__main__":
         dataset_name=args.dataset_name,
         model_family=normalize_model_family(args.model_family),
         prompt_mode=args.prompt_mode,
+        task_variant=args.task_variant,
         save_root=args.save_root,
     )

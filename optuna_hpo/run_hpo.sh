@@ -8,6 +8,7 @@ cd .. || exit 1
 DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic, eatd
 MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
+TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
 
 case "${MODEL_FAMILY}:${PROMPT_MODE}" in
     audio:full|audio:audiotext|text:textonly)
@@ -42,6 +43,7 @@ echo "======================================"
 echo "Dataset Name: $DATASET_NAME"
 echo "Model Family: $MODEL_FAMILY"
 echo "Prompt Mode: $PROMPT_MODE"
+echo "Task Variant: $TASK_VARIANT"
 echo "Number of Trials: $N_TRIALS"
 echo "Study Name: $STUDY_NAME"
 echo "Storage Path: $STORAGE_PATH"
@@ -56,6 +58,7 @@ if [ -d "/gpfs/projects/etur92" ]; then
     DATASET_NAME="$DATASET_NAME" \
     MODEL_FAMILY="$MODEL_FAMILY" \
     PROMPT_MODE="$PROMPT_MODE" \
+    TASK_VARIANT="$TASK_VARIANT" \
     N_TRIALS="$N_TRIALS" \
     STUDY_NAME="$STUDY_NAME" \
     STORAGE_PATH="$STORAGE_PATH" \
@@ -77,7 +80,8 @@ else
         --save-root "$SAVE_PATH" \
         --dataset-name "$DATASET_NAME" \
         --model-family "$MODEL_FAMILY" \
-        --prompt-mode "$PROMPT_MODE"
+        --prompt-mode "$PROMPT_MODE" \
+        --task-variant "$TASK_VARIANT"
 fi
 
 echo ""
