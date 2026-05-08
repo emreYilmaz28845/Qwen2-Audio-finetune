@@ -13,7 +13,7 @@
 module purge
 module load bsc/1.0
 module load miniforge/24.3.0-0
-source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5/bin/activate
+source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5_rebuilt/bin/activate
 
 cd /gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
 mkdir -p logs
@@ -23,7 +23,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 # --- Set the checkpoint to evaluate ---
 # Override via: sbatch --export=PEFT_PATH=/path/to/checkpoint eval.slurm
-export PEFT_PATH="${PEFT_PATH:-/home/emre/Projects/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_cmdc_cv_5fold/fold3_trial_trial_013_lr9e-04_bs2_r12_a32/best_model}"
+export PEFT_PATH="${PEFT_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_cmdc_cv_5fold/trial_013/fold3_trial_trial_013_lr9e-04_bs2_r12_a32/best_model}"
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}"
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}"
 export CHECKPOINT_MODE="${CHECKPOINT_MODE:-auto}"

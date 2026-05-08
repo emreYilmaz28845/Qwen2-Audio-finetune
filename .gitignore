@@ -15,13 +15,12 @@ venv/
 # Training/runtime outputs
 outputs/
 output_model/
+optuna_studies/
 exp/
 kernel_meta
 *.log
 
 # Local data and large artifacts
-output_model/
-optuna_studies/
 papers/
 logs/
 data-backup/

@@ -29,7 +29,6 @@ WANDB_RUN_NAME_PREFIX="${WANDB_RUN_NAME_PREFIX:-cmdc}"
 WANDB_GROUP="${WANDB_GROUP:-cmdc_5fold}"
 WANDB_MODE="${WANDB_MODE:-offline}"
 WANDB_LOG_STEP="${WANDB_LOG_STEP:-10}"
-PROMPT_VARIANT="${PROMPT_VARIANT:-full}"
 
 NUM_WORKERS="${NUM_WORKERS:-1}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
@@ -46,21 +45,14 @@ echo "  CMDC_ROOT  : $CMDC_ROOT"
 echo "  FOLDS      : $FOLDS"
 echo "  LR         : $LR"
 echo "  NUM_GPUS   : $NUM_GPUS"
-echo "  PROMPTS    : $PROMPT_VARIANT"
 echo "============================================"
-
-if [[ "$PROMPT_VARIANT" == "textonly" ]]; then
-    PROMPT_SUFFIX="_multiprompt_textonly.jsonl"
-else
-    PROMPT_SUFFIX="_multiprompt.jsonl"
-fi
 
 for FOLD in $FOLDS; do
     FOLD_NAME="fold${FOLD}"
     TRAIN_DATA_PATH="$CMDC_ROOT/$FOLD_NAME/train"
     EVAL_DATA_PATH="$CMDC_ROOT/$FOLD_NAME/test"
-    TRAIN_PROMPT_FILE="${FOLD_NAME}${PROMPT_SUFFIX}"
-    EVAL_PROMPT_FILE="${FOLD_NAME}${PROMPT_SUFFIX}"
+    TRAIN_PROMPT_FILE="${FOLD_NAME}_multiprompt.jsonl"
+    EVAL_PROMPT_FILE="${FOLD_NAME}_multiprompt.jsonl"
     TRAIN_SCP_FILE="${FOLD_NAME}.scp"
     EVAL_SCP_FILE="${FOLD_NAME}.scp"
     TRAIN_TASK_FILE="${FOLD_NAME}_multitask.jsonl"

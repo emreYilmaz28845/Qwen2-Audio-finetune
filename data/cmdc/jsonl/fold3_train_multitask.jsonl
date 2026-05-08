@@ -91,15 +91,15 @@
 {"key": "MDD20_Q6", "task": "MDD20_Q6_抑郁症识别", "target": "抑郁"}
 {"key": "MDD20_Q7", "task": "MDD20_Q7_抑郁症识别", "target": "抑郁"}
 {"key": "MDD20_Q9", "task": "MDD20_Q9_抑郁症识别", "target": "抑郁"}
-{"key": "MDD21_Q12", "task": "MDD21_Q12_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q1", "task": "MDD21_Q1_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q10", "task": "MDD21_Q10_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q11", "task": "MDD21_Q11_抑郁症识别", "target": "抑郁"}
+{"key": "MDD21_Q12", "task": "MDD21_Q12_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q2", "task": "MDD21_Q2_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q3", "task": "MDD21_Q3_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q4", "task": "MDD21_Q4_抑郁症识别", "target": "抑郁"}
-{"key": "MDD21_Q5", "task": "MDD21_Q5_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q6", "task": "MDD21_Q6_抑郁症识别", "target": "抑郁"}
+{"key": "MDD21_Q5", "task": "MDD21_Q5_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q7", "task": "MDD21_Q7_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q8", "task": "MDD21_Q8_抑郁症识别", "target": "抑郁"}
 {"key": "MDD21_Q9", "task": "MDD21_Q9_抑郁症识别", "target": "抑郁"}
@@ -438,7 +438,7 @@
 {"key": "HC42_Q11", "task": "HC42_Q11_抑郁症识别", "target": "非抑郁"}
 {"key": "HC42_Q12", "task": "HC42_Q12_抑郁症识别", "target": "非抑郁"}
 {"key": "HC42_Q2", "task": "HC42_Q2_抑郁症识别", "target": "非抑郁"}
-{"key": "HC42_Q3-", "task": "HC42_Q3-_抑郁症识别", "target": "非抑郁"}
+{"key": "HC42_Q3", "task": "HC42_Q3_抑郁症识别", "target": "非抑郁"}
 {"key": "HC42_Q4", "task": "HC42_Q4_抑郁症识别", "target": "非抑郁"}
 {"key": "HC42_Q5", "task": "HC42_Q5_抑郁症识别", "target": "非抑郁"}
 {"key": "HC42_Q6", "task": "HC42_Q6_抑郁症识别", "target": "非抑郁"}
@@ -499,7 +499,7 @@
 {"key": "HC47_Q12", "task": "HC47_Q12_抑郁症识别", "target": "非抑郁"}
 {"key": "HC47_Q2", "task": "HC47_Q2_抑郁症识别", "target": "非抑郁"}
 {"key": "HC47_Q3", "task": "HC47_Q3_抑郁症识别", "target": "非抑郁"}
-{"key": "HC47_Q4-", "task": "HC47_Q4-_抑郁症识别", "target": "非抑郁"}
+{"key": "HC47_Q4", "task": "HC47_Q4_抑郁症识别", "target": "非抑郁"}
 {"key": "HC47_Q5", "task": "HC47_Q5_抑郁症识别", "target": "非抑郁"}
 {"key": "HC47_Q6", "task": "HC47_Q6_抑郁症识别", "target": "非抑郁"}
 {"key": "HC47_Q7", "task": "HC47_Q7_抑郁症识别", "target": "非抑郁"}
@@ -517,10 +517,10 @@
 {"key": "HC48_Q7", "task": "HC48_Q7_抑郁症识别", "target": "非抑郁"}
 {"key": "HC48_Q8", "task": "HC48_Q8_抑郁症识别", "target": "非抑郁"}
 {"key": "HC48_Q9", "task": "HC48_Q9_抑郁症识别", "target": "非抑郁"}
-{"key": "HC49_Q12", "task": "HC49_Q12_抑郁症识别", "target": "非抑郁"}
 {"key": "HC49_Q1", "task": "HC49_Q1_抑郁症识别", "target": "非抑郁"}
 {"key": "HC49_Q10", "task": "HC49_Q10_抑郁症识别", "target": "非抑郁"}
 {"key": "HC49_Q11", "task": "HC49_Q11_抑郁症识别", "target": "非抑郁"}
+{"key": "HC49_Q12", "task": "HC49_Q12_抑郁症识别", "target": "非抑郁"}
 {"key": "HC49_Q2", "task": "HC49_Q2_抑郁症识别", "target": "非抑郁"}
 {"key": "HC49_Q3", "task": "HC49_Q3_抑郁症识别", "target": "非抑郁"}
 {"key": "HC49_Q4", "task": "HC49_Q4_抑郁症识别", "target": "非抑郁"}
@@ -565,8 +565,8 @@
 {"key": "HC52_Q7", "task": "HC52_Q7_抑郁症识别", "target": "非抑郁"}
 {"key": "HC52_Q8", "task": "HC52_Q8_抑郁症识别", "target": "非抑郁"}
 {"key": "HC52_Q9", "task": "HC52_Q9_抑郁症识别", "target": "非抑郁"}
-{"key": "HC01_Q1", "task": "HC01_Q1_抑郁症识别", "target": "非抑郁"}
 {"key": "HC01_Q10", "task": "HC01_Q10_抑郁症识别", "target": "非抑郁"}
+{"key": "HC01_Q1", "task": "HC01_Q1_抑郁症识别", "target": "非抑郁"}
 {"key": "HC01_Q11", "task": "HC01_Q11_抑郁症识别", "target": "非抑郁"}
 {"key": "HC01_Q12", "task": "HC01_Q12_抑郁症识别", "target": "非抑郁"}
 {"key": "HC01_Q2", "task": "HC01_Q2_抑郁症识别", "target": "非抑郁"}

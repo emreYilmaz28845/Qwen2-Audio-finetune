@@ -26,9 +26,9 @@ class TrainConfig:
     lr: float = 1e-4
     batch_size: int = 1
     total_train_steps: int = 100000
-    grad_accumulate_step : int = 5
+    grad_accumulate_step : int = 1
     eval_step: int = 10
-    train_epoch: int = 20
+    train_epoch: int = 10
     warmup_steps: int = 1000
     use_bfloat16: bool = True
 

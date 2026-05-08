@@ -1,29 +1,18 @@
 import os
-from pathlib import Path
-
-
-BASE_DIR = Path(__file__).resolve().parent
-OUT_DIR = (BASE_DIR / "../data/cmdc").resolve()
-DATASETS_ROOT = Path(os.environ["AUDIOLLM_DATASETS_ROOT"]).resolve()
-DATASETS_PREFIX = os.environ.get("AUDIOLLM_DATASETS_PREFIX", "../Datasets")
-CMDC_DIR = DATASETS_ROOT / "CMDC"
-
-
+import argparse
 
 def get_subject_folders(data_root):
-    """Get and sort the HC and MDD folder lists."""
-    subject_folders = [
-        f for f in os.listdir(data_root)
-        if os.path.isdir(os.path.join(data_root, f))
-    ]
-
-    hc_folders = sorted([f for f in subject_folders if f.startswith("HC")])
-    mdd_folders = sorted([f for f in subject_folders if f.startswith("MDD")])
+    """获取HC和MDD文件夹列表并排序"""
+    hc_path = os.path.join(data_root, "HC")
+    mdd_path = os.path.join(data_root, "MDD")
+    
+    hc_folders = sorted([f for f in os.listdir(hc_path) if os.path.isdir(os.path.join(hc_path, f))])
+    mdd_folders = sorted([f for f in os.listdir(mdd_path) if os.path.isdir(os.path.join(mdd_path, f))])
     
     return hc_folders, mdd_folders
 
 def generate_fold_files(data_root, output_dir, hc_folders, mdd_folders):
-    """Generate training and validation files for 5 folds."""
+    """生成5个fold的训练集和验证集文件"""
     
     folds = [
         {
@@ -61,48 +50,42 @@ def generate_fold_files(data_root, output_dir, hc_folders, mdd_folders):
     for fold in folds:
         print(f"生成 {fold['name']} 的文件...")
         
-        fold_dir = os.path.join(output_dir, fold["name"])
-        train_dir = os.path.join(fold_dir, "train")
-        test_dir = os.path.join(fold_dir, "test")
-        os.makedirs(train_dir, exist_ok=True)
-        os.makedirs(test_dir, exist_ok=True)
-
-        # Generate the training SCP file
-        train_scp_path = os.path.join(train_dir, f"{fold['name']}.scp")
+        # 生成训练集scp文件
+        train_scp_path = os.path.join(output_dir, f"{fold['name']}_train.scp")
         with open(train_scp_path, 'w', encoding='utf-8') as f:
-            # Add the MDD training set
+            # 添加MDD训练集
             for idx in fold['train']['MDD']:
                 if idx <= len(mdd_folders):
-                    folder_name = mdd_folders[idx-1]  # Index starts from 0
+                    folder_name = mdd_folders[idx-1]  # 索引从0开始
                     add_audio_files(f, "MDD", folder_name, data_root)
             
-            # Add the HC training set
+            # 添加HC训练集
             for idx in fold['train']['HC']:
                 if idx <= len(hc_folders):
-                    folder_name = hc_folders[idx-1]  # Index starts from 0
+                    folder_name = hc_folders[idx-1]  # 索引从0开始
                     add_audio_files(f, "HC", folder_name, data_root)
         
-        # Generate the validation SCP file
-        test_scp_path = os.path.join(test_dir, f"{fold['name']}.scp")
+        # 生成验证集scp文件
+        test_scp_path = os.path.join(output_dir, f"{fold['name']}_val.scp")
         with open(test_scp_path, 'w', encoding='utf-8') as f:
-            # Add the MDD validation set
+            # 添加MDD验证集
             for idx in fold['test']['MDD']:
                 if idx <= len(mdd_folders):
-                    folder_name = mdd_folders[idx-1]  # Index starts from 0
+                    folder_name = mdd_folders[idx-1]  # 索引从0开始
                     add_audio_files(f, "MDD", folder_name, data_root)
             
-            # Add the HC validation set
+            # 添加HC验证集
             for idx in fold['test']['HC']:
                 if idx <= len(hc_folders):
-                    folder_name = hc_folders[idx-1]  # Index starts from 0
+                    folder_name = hc_folders[idx-1]  # 索引从0开始
                     add_audio_files(f, "HC", folder_name, data_root)
         
         print(f"  - 训练集: {train_scp_path}")
         print(f"  - 验证集: {test_scp_path}")
 
 def add_audio_files(file_obj, category, folder_name, data_root):
-    """Add all WAV files in the specified folder to the SCP file."""
-    folder_path = os.path.join(data_root, folder_name)
+    """将指定文件夹中的所有wav文件添加到scp文件中"""
+    folder_path = os.path.join(data_root, category, folder_name)
     
     if not os.path.exists(folder_path):
         print(f"警告: 路径不存在 {folder_path}")
@@ -111,43 +94,51 @@ def add_audio_files(file_obj, category, folder_name, data_root):
     for file in os.listdir(folder_path):
         if file.endswith('.wav'):
             file_path = os.path.join(folder_path, file)
-            relative_path = os.path.join(
-                DATASETS_PREFIX,
-                os.path.relpath(file_path, start=DATASETS_ROOT),
-            )
+            absolute_path = os.path.abspath(file_path)
             
-            # Get the filename without the extension
+            # 获取文件名（不带后缀）
             file_name_without_ext = os.path.splitext(file)[0]
             
-            # Generate the first column: folder name + filename
+            # 生成第一列：文件夹名_文件名
             first_column = f"{folder_name}_{file_name_without_ext}"
             
-            # Write to the SCP file
-            file_obj.write(f"{first_column} {relative_path}\n")
+            # 写入scp文件
+            file_obj.write(f"{first_column} {absolute_path}\n")
 
 def main():
+    parser = argparse.ArgumentParser(description='生成分层5折交叉验证的scp文件')
+    parser.add_argument('--data_root', type=str, required=True,
+                       help='数据集根目录路径，包含HC和MDD文件夹')
+    parser.add_argument('--output_dir', type=str, default='kfold_splits',
+                       help='输出目录路径，默认为kfold_splits')
     
+    args = parser.parse_args()
     
-    # Get the HC and MDD folder lists
-    hc_folders, mdd_folders = get_subject_folders(CMDC_DIR)
+    # 检查数据集路径是否存在
+    if not os.path.exists(args.data_root):
+        print(f"错误: 数据集路径 '{args.data_root}' 不存在")
+        return
+    
+    # 获取HC和MDD文件夹列表
+    hc_folders, mdd_folders = get_subject_folders(args.data_root)
     
     print(f"找到 {len(hc_folders)} 个HC文件夹: {hc_folders}")
     print(f"找到 {len(mdd_folders)} 个MDD文件夹: {mdd_folders}")
     
-    # Generate the 5-fold cross-validation files
-    generate_fold_files(CMDC_DIR, OUT_DIR, hc_folders, mdd_folders)
+    # 生成5折交叉验证文件
+    generate_fold_files(args.data_root, args.output_dir, hc_folders, mdd_folders)
     
     print("所有fold文件生成完成！")
 
 if __name__ == "__main__":
-    data_root = CMDC_DIR
-    output_dir = OUT_DIR 
+    data_root = "/root/autodl-tmp/CMDC_data"
+    output_dir = "/root/autodl-tmp/Qwen2-Audio-finetune/data/cmdc"
     
-    # Get the HC and MDD folder lists
+    # 获取HC和MDD文件夹列表
     hc_folders, mdd_folders = get_subject_folders(data_root)
     
     print(f"找到 {len(hc_folders)} 个HC文件夹: {hc_folders}")
     print(f"找到 {len(mdd_folders)} 个MDD文件夹: {mdd_folders}")
     
-    # Generate the 5-fold cross-validation files
+    # 生成5折交叉验证文件
     generate_fold_files(data_root, output_dir, hc_folders, mdd_folders)

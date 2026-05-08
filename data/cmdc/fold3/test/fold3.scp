@@ -5,7 +5,6 @@ MDD07_Q12 ../Datasets/CMDC/MDD07/Q12.wav
 MDD07_Q2 ../Datasets/CMDC/MDD07/Q2.wav
 MDD07_Q3 ../Datasets/CMDC/MDD07/Q3.wav
 MDD07_Q4 ../Datasets/CMDC/MDD07/Q4.wav
-MDD07_Q5 ../Datasets/CMDC/MDD07/Q5.wav
 MDD07_Q6 ../Datasets/CMDC/MDD07/Q6.wav
 MDD07_Q7 ../Datasets/CMDC/MDD07/Q7.wav
 MDD07_Q8 ../Datasets/CMDC/MDD07/Q8.wav
@@ -32,7 +31,6 @@ MDD09_Q4 ../Datasets/CMDC/MDD09/Q4.wav
 MDD09_Q5 ../Datasets/CMDC/MDD09/Q5.wav
 MDD09_Q6 ../Datasets/CMDC/MDD09/Q6.wav
 MDD09_Q7 ../Datasets/CMDC/MDD09/Q7.wav
-MDD09_Q8 ../Datasets/CMDC/MDD09/Q8.wav
 MDD09_Q9 ../Datasets/CMDC/MDD09/Q9.wav
 MDD10_Q1 ../Datasets/CMDC/MDD10/Q1.wav
 MDD10_Q10 ../Datasets/CMDC/MDD10/Q10.wav
@@ -77,7 +75,6 @@ HC13_Q4 ../Datasets/CMDC/HC13/Q4.wav
 HC13_Q5 ../Datasets/CMDC/HC13/Q5.wav
 HC13_Q6 ../Datasets/CMDC/HC13/Q6.wav
 HC13_Q7 ../Datasets/CMDC/HC13/Q7.wav
-HC13_Q8 ../Datasets/CMDC/HC13/Q8.wav
 HC13_Q9 ../Datasets/CMDC/HC13/Q9.wav
 HC14_Q1 ../Datasets/CMDC/HC14/Q1.wav
 HC14_Q10 ../Datasets/CMDC/HC14/Q10.wav
@@ -122,7 +119,7 @@ HC17_Q12 ../Datasets/CMDC/HC17/Q12.wav
 HC17_Q2 ../Datasets/CMDC/HC17/Q2.wav
 HC17_Q3 ../Datasets/CMDC/HC17/Q3.wav
 HC17_Q4 ../Datasets/CMDC/HC17/Q4.wav
-HC17_Q5 ../Datasets/CMDC/HC17/Q5.wav
+HC17_Q5- ../Datasets/CMDC/HC17/Q5-.wav
 HC17_Q6 ../Datasets/CMDC/HC17/Q6.wav
 HC17_Q7 ../Datasets/CMDC/HC17/Q7.wav
 HC17_Q8 ../Datasets/CMDC/HC17/Q8.wav
@@ -199,14 +196,18 @@ HC23_Q6 ../Datasets/CMDC/HC23/Q6.wav
 HC23_Q7 ../Datasets/CMDC/HC23/Q7.wav
 HC23_Q8 ../Datasets/CMDC/HC23/Q8.wav
 HC23_Q9 ../Datasets/CMDC/HC23/Q9.wav
-HC24_Q5 ../Datasets/CMDC/HC24/Q5.wav
 HC24_Q1 ../Datasets/CMDC/HC24/Q1.wav
 HC24_Q11 ../Datasets/CMDC/HC24/Q11.wav
 HC24_Q12 ../Datasets/CMDC/HC24/Q12.wav
 HC24_Q2 ../Datasets/CMDC/HC24/Q2.wav
 HC24_Q3 ../Datasets/CMDC/HC24/Q3.wav
 HC24_Q4 ../Datasets/CMDC/HC24/Q4.wav
+HC24_Q5 ../Datasets/CMDC/HC24/Q5.wav
 HC24_Q6 ../Datasets/CMDC/HC24/Q6.wav
 HC24_Q7 ../Datasets/CMDC/HC24/Q7.wav
 HC24_Q8 ../Datasets/CMDC/HC24/Q8.wav
 HC24_Q9 ../Datasets/CMDC/HC24/Q9.wav
+HC13_Q8 ../Datasets/CMDC/HC13/Q8.wav
+HC17_Q5 ../Datasets/CMDC/HC17/Q5.wav
+MDD07_Q5 ../Datasets/CMDC/MDD07/Q5.wav
+MDD09_Q8 ../Datasets/CMDC/MDD09/Q8.wav
