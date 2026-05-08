@@ -1,18 +1,26 @@
 import torch
 
 from optuna_hpo.daic_eval import (
+    DAIC_EVAL_LEVEL_PERSON,
+    DAIC_EVAL_LEVEL_SEGMENT,
     DAIC_EVAL_MODE_MAJORITY_VOTE,
     DAIC_EVAL_MODE_MAX_PROBABILITY,
     DAIC_EVAL_MODE_MEAN_PROBABILITY,
     aggregate_participant_predictions,
     compute_segment_depressed_probability,
     extract_participant_id,
+    normalize_daic_eval_level,
 )
 
 
 def test_extract_participant_id():
     assert extract_participant_id("335_segment_12") == "335"
     assert extract_participant_id("491_random_segment_7") == "491"
+
+
+def test_normalize_daic_eval_level():
+    assert normalize_daic_eval_level("segment") == DAIC_EVAL_LEVEL_SEGMENT
+    assert normalize_daic_eval_level("person") == DAIC_EVAL_LEVEL_PERSON
 
 
 def test_majority_vote_uses_mean_probability_for_ties():

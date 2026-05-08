@@ -10,18 +10,21 @@ from optuna_hpo.hpo import (
     DATASET_DAIC_WOZ,
     DATASET_EATD,
     DATASET_MERGED,
+    DAIC_EVAL_LEVEL_PERSON,
     DAIC_EVAL_MODE_MAJORITY_VOTE,
     MODEL_FAMILY_AUDIO,
     MODEL_FAMILY_TEXT,
     PROMPT_MODE_AUDIOTEXT,
     PROMPT_MODE_FULL,
     PROMPT_MODE_TEXTONLY,
+    SUPPORTED_DAIC_EVAL_LEVELS,
     SUPPORTED_DAIC_EVAL_MODES,
     TASK_VARIANT_DEFAULT,
     TASK_VARIANT_FILTERED,
     apply_dataset_env,
     default_save_root,
     get_dataset_config,
+    normalize_daic_eval_level,
     normalize_daic_eval_mode,
     normalize_model_family,
     resolve_launch_input_mode,
@@ -71,6 +74,12 @@ def main():
         help="Optional output root override",
     )
     parser.add_argument(
+        "--daic-eval-level",
+        type=str,
+        choices=sorted(SUPPORTED_DAIC_EVAL_LEVELS),
+        default=os.environ.get("DAIC_EVAL_LEVEL", DAIC_EVAL_LEVEL_PERSON),
+    )
+    parser.add_argument(
         "--daic-eval-mode",
         type=str,
         choices=sorted(SUPPORTED_DAIC_EVAL_MODES),
@@ -86,6 +95,7 @@ def main():
 
     model_family = normalize_model_family(args.model_family)
     validate_mode_combination(model_family, args.prompt_mode)
+    daic_eval_level = normalize_daic_eval_level(args.daic_eval_level)
     daic_eval_mode = normalize_daic_eval_mode(args.daic_eval_mode)
     daic_person_threshold = validate_daic_person_threshold(args.daic_person_threshold)
 
@@ -96,6 +106,7 @@ def main():
     os.environ["MODEL_FAMILY"] = model_family
     os.environ["PROMPT_MODE"] = args.prompt_mode
     os.environ["TASK_VARIANT"] = args.task_variant
+    os.environ["DAIC_EVAL_LEVEL"] = daic_eval_level
     os.environ["DAIC_EVAL_MODE"] = daic_eval_mode
     os.environ["DAIC_PERSON_THRESHOLD"] = str(daic_person_threshold)
 
@@ -119,6 +130,7 @@ def main():
         dataset_name=args.dataset_name,
         input_mode=launch_input_mode,
         num_gpus=args.num_gpus,
+        daic_eval_level=daic_eval_level,
         daic_eval_mode=daic_eval_mode,
         daic_person_threshold=daic_person_threshold,
     )

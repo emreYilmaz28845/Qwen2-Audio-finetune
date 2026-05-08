@@ -9,6 +9,7 @@ DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
+DAIC_EVAL_LEVEL="${DAIC_EVAL_LEVEL:-person}" # segment or person
 DAIC_EVAL_MODE="${DAIC_EVAL_MODE:-majority_vote}" # majority_vote, mean_probability, or max_probability
 DAIC_PERSON_THRESHOLD="${DAIC_PERSON_THRESHOLD:-0.5}"
 ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
@@ -56,6 +57,7 @@ echo "Dataset Name: $DATASET_NAME"
 echo "Model Family: $MODEL_FAMILY"
 echo "Prompt Mode: $PROMPT_MODE"
 echo "Task Variant: $TASK_VARIANT"
+echo "DAIC Eval Level: $DAIC_EVAL_LEVEL"
 echo "DAIC Eval Mode: $DAIC_EVAL_MODE"
 echo "DAIC Person Threshold: $DAIC_PERSON_THRESHOLD"
 echo "Number of Trials: $N_TRIALS"
@@ -77,6 +79,7 @@ if [ -d "/gpfs/projects/etur92" ]; then
     MODEL_FAMILY="$MODEL_FAMILY" \
     PROMPT_MODE="$PROMPT_MODE" \
     TASK_VARIANT="$TASK_VARIANT" \
+    DAIC_EVAL_LEVEL="$DAIC_EVAL_LEVEL" \
     DAIC_EVAL_MODE="$DAIC_EVAL_MODE" \
     DAIC_PERSON_THRESHOLD="$DAIC_PERSON_THRESHOLD" \
     N_TRIALS="$N_TRIALS" \
@@ -106,6 +109,7 @@ else
         --model-family "$MODEL_FAMILY" \
         --prompt-mode "$PROMPT_MODE" \
         --task-variant "$TASK_VARIANT" \
+        --daic-eval-level "$DAIC_EVAL_LEVEL" \
         --daic-eval-mode "$DAIC_EVAL_MODE" \
         --daic-person-threshold "$DAIC_PERSON_THRESHOLD" \
         --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \

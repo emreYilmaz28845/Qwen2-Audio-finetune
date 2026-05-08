@@ -44,6 +44,7 @@ def main():
     progress_file = config_data.get("progress_file")
     result_file = config_data.get("result_file")
     stop_file = config_data.get("stop_file")
+    daic_eval_level = config_data.get("daic_eval_level", os.environ.get("DAIC_EVAL_LEVEL", "person"))
     daic_eval_mode = config_data.get("daic_eval_mode", os.environ.get("DAIC_EVAL_MODE", "majority_vote"))
     daic_person_threshold = float(
         config_data.get("daic_person_threshold", os.environ.get("DAIC_PERSON_THRESHOLD", "0.5"))
@@ -89,6 +90,7 @@ def main():
     cfg.data.wav_type = wav_type
     cfg.env.progress_file = progress_file or ""
     cfg.env.stop_file = stop_file or ""
+    cfg.eval.daic_eval_level = daic_eval_level
     cfg.eval.daic_eval_mode = daic_eval_mode
     cfg.eval.daic_person_threshold = daic_person_threshold
     
@@ -112,6 +114,7 @@ def main():
             "trial_params": trial_params,
             "input_mode": input_mode,
             "dataset_name": dataset_name,
+            "daic_eval_level": daic_eval_level,
             "daic_eval_mode": daic_eval_mode,
             "daic_person_threshold": daic_person_threshold,
         }

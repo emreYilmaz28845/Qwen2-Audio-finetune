@@ -30,7 +30,7 @@ from transformers import (
 
 from src.dataset import AudioDataset, collate_fn_qwen2audio
 from optuna_hpo.daic_eval import (
-    DAIC_EVAL_MODE_MAJORITY_VOTE,
+    DAIC_EVAL_LEVEL_PERSON,
     compute_segment_depressed_probability,
     extract_participant_id,
     get_daic_label_token_ids,
@@ -321,13 +321,17 @@ def _log_trial_header(logger, trial_name, cfg, world_size, input_mode):
     logger.info("LoRA Alpha: %s", cfg.peft.lora_alpha)
     logger.info("World Size: %s", world_size)
     if getattr(cfg.data, "dataset_name", "") == "daic_woz":
+        logger.info("DAIC Eval Level: %s", cfg.eval.daic_eval_level)
         logger.info("DAIC Eval Mode: %s", cfg.eval.daic_eval_mode)
         logger.info("DAIC Person Threshold: %.4f", cfg.eval.daic_person_threshold)
     logger.info("%s", "=" * 60)
 
 
 def _is_daic_person_eval(cfg):
-    return getattr(cfg.data, "dataset_name", "") == "daic_woz"
+    return (
+        getattr(cfg.data, "dataset_name", "") == "daic_woz"
+        and getattr(cfg.eval, "daic_eval_level", DAIC_EVAL_LEVEL_PERSON) == DAIC_EVAL_LEVEL_PERSON
+    )
 
 
 def _build_daic_eval_records(metric_processor, logits, labels, keys, participant_ids, target_texts):

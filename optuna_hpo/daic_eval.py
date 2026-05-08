@@ -14,6 +14,12 @@ SUPPORTED_DAIC_EVAL_MODES = {
     DAIC_EVAL_MODE_MEAN_PROBABILITY,
     DAIC_EVAL_MODE_MAX_PROBABILITY,
 }
+DAIC_EVAL_LEVEL_SEGMENT = "segment"
+DAIC_EVAL_LEVEL_PERSON = "person"
+SUPPORTED_DAIC_EVAL_LEVELS = {
+    DAIC_EVAL_LEVEL_SEGMENT,
+    DAIC_EVAL_LEVEL_PERSON,
+}
 
 DAIC_DEPRESSED_LABEL = "抑郁"
 DAIC_NON_DEPRESSED_LABEL = "非抑郁"
@@ -26,6 +32,16 @@ def normalize_daic_eval_mode(mode: str):
         raise ValueError(
             f"Unsupported daic_eval_mode={mode!r}. "
             f"Expected one of {sorted(SUPPORTED_DAIC_EVAL_MODES)}."
+        )
+    return normalized
+
+
+def normalize_daic_eval_level(level: str):
+    normalized = (level or DAIC_EVAL_LEVEL_PERSON).strip().lower()
+    if normalized not in SUPPORTED_DAIC_EVAL_LEVELS:
+        raise ValueError(
+            f"Unsupported daic_eval_level={level!r}. "
+            f"Expected one of {sorted(SUPPORTED_DAIC_EVAL_LEVELS)}."
         )
     return normalized
 

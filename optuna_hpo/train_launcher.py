@@ -87,6 +87,7 @@ def launch_ddp_training(
     num_gpus: int = 4,
     enable_pruning: bool = True,
     prune_mode: str = "eval",
+    daic_eval_level: str = "person",
     daic_eval_mode: str = "majority_vote",
     daic_person_threshold: float = 0.5,
 ) -> float:
@@ -125,6 +126,7 @@ def launch_ddp_training(
         "result_file": result_file,
         "stop_file": stop_file,
         "prune_mode": prune_mode,
+        "daic_eval_level": daic_eval_level,
         "daic_eval_mode": daic_eval_mode,
         "daic_person_threshold": float(daic_person_threshold),
     }
@@ -150,6 +152,7 @@ def launch_ddp_training(
     print(f"  Dataset: {dataset_name}")
     print(f"  Input Mode: {input_mode}")
     print(f"  Prune Mode: {prune_mode}")
+    print(f"  DAIC Eval Level: {daic_eval_level}")
     print(f"  DAIC Eval Mode: {daic_eval_mode}")
     print(f"  DAIC Person Threshold: {daic_person_threshold}")
     print(f"Command: {' '.join(cmd)}")
@@ -228,6 +231,7 @@ if __name__ == "__main__":
         num_gpus=args.num_gpus,
         enable_pruning=False,
         prune_mode="disabled",
+        daic_eval_level=os.environ.get("DAIC_EVAL_LEVEL", "person"),
         daic_eval_mode=os.environ.get("DAIC_EVAL_MODE", "majority_vote"),
         daic_person_threshold=float(os.environ.get("DAIC_PERSON_THRESHOLD", "0.5")),
     )
