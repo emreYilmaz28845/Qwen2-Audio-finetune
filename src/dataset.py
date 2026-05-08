@@ -120,15 +120,16 @@ class AudioDataset(torch.utils.data.Dataset):
 
         # CHECKPOINT == commented truncation logic f
         # # ===== Truncation logic =====
-        # max_samples = int(self.max_duration * sr)
-        # if len(audio) > max_samples:
-        #     if not self.inference_mode:
-        #         # Training mode: randomly crop a segment of audio
-        #         start = np.random.randint(0, len(audio) - max_samples)
-        #         audio = audio[start:start + max_samples]
-        #     else:
-        #         # Inference mode: take the first 15 seconds
-        #         audio = audio[:max_samples]
+        max_samples = int(self.max_duration * sr)
+        if len(audio) > max_samples:
+
+            if not self.inference_mode:
+            # Training mode: randomly crop a segment of audio
+                start = np.random.randint(0, len(audio) - max_samples)
+                audio = audio[start:start + max_samples]
+            else:
+                # Inference mode: take the first 15 seconds
+                audio = audio[:max_samples]
 
         # ===== Return data =====
         if not self.inference_mode:
