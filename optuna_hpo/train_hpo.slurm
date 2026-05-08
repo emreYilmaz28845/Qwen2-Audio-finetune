@@ -97,6 +97,11 @@ case "$DATASET_NAME" in
         ;;
 esac
 
+DAIC_LEVEL_SUFFIX=""
+if [ "$DATASET_NAME" = "daic_woz" ]; then
+    DAIC_LEVEL_SUFFIX="_${DAIC_EVAL_LEVEL}"
+fi
+
 case "$PROMPT_MODE" in
     full)
         PROMPT_FILE="${DATASET_NAME}_multiprompt.jsonl"
@@ -142,9 +147,9 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 export AUDIOLLM_ENABLE_GPU_LOG="${AUDIOLLM_ENABLE_GPU_LOG:-1}"
 export AUDIOLLM_GPU_LOG_INTERVAL_SEC="${AUDIOLLM_GPU_LOG_INTERVAL_SEC:-60}"
 
-export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/${LOG_DIR_NAME}}"
-export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/${STORAGE_DIR_NAME}}"
-export SAVE_PATH="${SAVE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/${OUTPUT_DIR_NAME}/${PROMPT_MODE}}"
+export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/${LOG_DIR_NAME}${DAIC_LEVEL_SUFFIX}}"
+export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/${STORAGE_DIR_NAME}${DAIC_LEVEL_SUFFIX}}"
+export SAVE_PATH="${SAVE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/${OUTPUT_DIR_NAME}${DAIC_LEVEL_SUFFIX}/${PROMPT_MODE}}"
 
 mkdir -p "$LOG_DIR" "$STORAGE_PATH" "$SAVE_PATH"
 
@@ -154,7 +159,7 @@ exec > >(tee -a "$SLURM_STDOUT_FILE")
 exec 2> >(tee -a "$SLURM_STDERR_FILE" >&2)
 
 N_TRIALS="${N_TRIALS:-20}"
-STUDY_NAME="${STUDY_NAME:-${DATASET_NAME}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME="${STUDY_NAME:-${DATASET_NAME}${DAIC_LEVEL_SUFFIX}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
 LOG_FILE="$LOG_DIR/${LOG_FILE_PREFIX}_${TIMESTAMP}.log"

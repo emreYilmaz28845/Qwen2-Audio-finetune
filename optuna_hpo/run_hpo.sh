@@ -37,12 +37,17 @@ case "$DATASET_NAME" in
         ;;
 esac
 
+DAIC_LEVEL_SUFFIX=""
+if [ "$DATASET_NAME" = "daic_woz" ]; then
+    DAIC_LEVEL_SUFFIX="_${DAIC_EVAL_LEVEL}"
+fi
+
 N_TRIALS=${1:-20}
-STUDY_NAME_DEFAULT="${DATASET_NAME}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)"
+STUDY_NAME_DEFAULT="${DATASET_NAME}${DAIC_LEVEL_SUFFIX}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)"
 STUDY_NAME=${2:-$STUDY_NAME_DEFAULT}
-STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_${DATASET_NAME}}"
-SAVE_PATH="${SAVE_PATH:-output_model/optuna_${DATASET_NAME}_hpo/${PROMPT_MODE}}"
-LOG_DIR="${LOG_DIR:-logs/optuna_${DATASET_NAME}}"
+STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}}"
+SAVE_PATH="${SAVE_PATH:-output_model/optuna_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}_hpo/${PROMPT_MODE}}"
+LOG_DIR="${LOG_DIR:-logs/optuna_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}}"
 PRUNING_FLAG="--disable-pruning"
 case "${ENABLE_PRUNING,,}" in
     1|true|yes|on)

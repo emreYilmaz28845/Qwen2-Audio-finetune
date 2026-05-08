@@ -139,6 +139,33 @@ def default_study_name(dataset_name: str, model_family: str, prompt_mode: str):
     return f"{dataset_name}_{model_family}_{prompt_mode}_hpo_{timestamp}"
 
 
+def _daic_eval_level_suffix(dataset_name: str, daic_eval_level: str):
+    if dataset_name != DATASET_DAIC_WOZ:
+        return ""
+    return f"_{normalize_daic_eval_level(daic_eval_level)}"
+
+
+def resolved_log_dir(dataset_name: str, daic_eval_level: str):
+    return f"{default_log_dir(dataset_name)}{_daic_eval_level_suffix(dataset_name, daic_eval_level)}"
+
+
+def resolved_storage_path(dataset_name: str, daic_eval_level: str):
+    return f"{default_storage_path(dataset_name)}{_daic_eval_level_suffix(dataset_name, daic_eval_level)}"
+
+
+def resolved_save_root(dataset_name: str, prompt_mode: str, daic_eval_level: str):
+    suffix = _daic_eval_level_suffix(dataset_name, daic_eval_level)
+    return f"output_model/optuna_{dataset_name}{suffix}_hpo/{prompt_mode}"
+
+
+def resolved_study_name(dataset_name: str, model_family: str, prompt_mode: str, daic_eval_level: str):
+    timestamp = os.environ.get("STUDY_TIMESTAMP", "")
+    if not timestamp:
+        timestamp = __import__("time").strftime("%Y%m%d_%H%M%S")
+    suffix = _daic_eval_level_suffix(dataset_name, daic_eval_level)
+    return f"{dataset_name}{suffix}_{model_family}_{prompt_mode}_hpo_{timestamp}"
+
+
 def dataset_root(dataset_name: str):
     return os.environ.get(
         "DATASET_ROOT",
@@ -292,9 +319,9 @@ def run_optimization(
     apply_dataset_env(dataset_cfg)
 
     launch_input_mode = resolve_launch_input_mode(model_family)
-    storage_path = storage_path or default_storage_path(dataset_name)
-    save_root = save_root or default_save_root(dataset_name, prompt_mode)
-    study_name = study_name or default_study_name(dataset_name, model_family, prompt_mode)
+    storage_path = storage_path or resolved_storage_path(dataset_name, daic_eval_level)
+    save_root = save_root or resolved_save_root(dataset_name, prompt_mode, daic_eval_level)
+    study_name = study_name or resolved_study_name(dataset_name, model_family, prompt_mode, daic_eval_level)
     model_path = resolve_model_path(model_family)
     num_gpus = int(os.environ.get("NUM_GPUS", "4"))
 
