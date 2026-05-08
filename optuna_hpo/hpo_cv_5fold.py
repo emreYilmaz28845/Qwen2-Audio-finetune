@@ -24,6 +24,14 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from optuna_hpo.train_launcher import launch_ddp_training
+from optuna_hpo.pruning import (
+    DEFAULT_ENABLE_PRUNING,
+    DEFAULT_PRUNER_INTERVAL_STEPS,
+    DEFAULT_PRUNER_STARTUP_TRIALS,
+    DEFAULT_PRUNER_WARMUP_STEPS,
+    build_pruner,
+    env_flag,
+)
 
 
 logging.basicConfig(
@@ -239,6 +247,7 @@ def run_fold_trial(
     launch_input_mode,
     model_family,
     prompt_mode,
+    enable_pruning,
 ):
     previous_env = {
         "TRAIN_PROMPT_FILE": os.environ.get("TRAIN_PROMPT_FILE"),
@@ -264,6 +273,7 @@ def run_fold_trial(
 
     try:
         best_f1 = launch_ddp_training(
+            trial=trial,
             trial_params=trial_params,
             trial_number=trial.number,
             model_path=model_path,
@@ -272,6 +282,8 @@ def run_fold_trial(
             save_path=fold_save_path,
             input_mode=launch_input_mode,
             num_gpus=num_gpus,
+            enable_pruning=enable_pruning,
+            prune_mode="eval" if enable_pruning else "disabled",
         )
     finally:
         for key, value in previous_env.items():
@@ -295,7 +307,16 @@ def run_fold_trial(
     }
 
 
-def build_objective(cmdc_root, folds, model_path, save_root, num_gpus, model_family, prompt_mode):
+def build_objective(
+    cmdc_root,
+    folds,
+    model_path,
+    save_root,
+    num_gpus,
+    model_family,
+    prompt_mode,
+    enable_pruning,
+):
     launch_input_mode = resolve_launch_input_mode(model_family)
 
     def objective(trial: optuna.Trial):
@@ -323,14 +344,34 @@ def build_objective(cmdc_root, folds, model_path, save_root, num_gpus, model_fam
                     launch_input_mode=launch_input_mode,
                     model_family=model_family,
                     prompt_mode=prompt_mode,
+                    enable_pruning=False,
                 )
                 fold_results.append(fold_result)
+                valid_fold_scores = [
+                    result["best_f1"]
+                    for result in fold_results
+                    if math.isfinite(result["best_f1"]) and result["best_f1"] != -1.0
+                ]
+                partial_mean = statistics.mean(valid_fold_scores) if valid_fold_scores else -1.0
+                trial.report(float(partial_mean), step=len(fold_results))
+                if enable_pruning and trial.should_prune():
+                    trial.set_user_attr("fold_results", fold_results)
+                    trial.set_user_attr("cv_mean_f1", partial_mean)
+                    trial.set_user_attr(
+                        "cv_std_f1",
+                        statistics.pstdev(valid_fold_scores) if len(valid_fold_scores) > 1 else 0.0,
+                    )
+                    raise optuna.TrialPruned(
+                        f"Trial {trial.number} pruned after {len(fold_results)} fold(s) with partial mean F1={partial_mean:.4f}"
+                    )
                 logger.info(
                     "Trial %s | %s best F1: %.4f",
                     trial.number,
                     fold_name,
                     fold_result["best_f1"],
                 )
+        except optuna.TrialPruned:
+            raise
         except Exception as exc:
             logger.error("Trial %s failed during fold evaluation: %s", trial.number, exc)
             logger.exception(exc)
@@ -396,6 +437,7 @@ def build_single_fold_objective(
     num_gpus,
     model_family,
     prompt_mode,
+    enable_pruning,
 ):
     fold_cfg = get_fold_config(cmdc_root, fold_name, prompt_mode)
     launch_input_mode = resolve_launch_input_mode(model_family)
@@ -422,7 +464,10 @@ def build_single_fold_objective(
                 launch_input_mode=launch_input_mode,
                 model_family=model_family,
                 prompt_mode=prompt_mode,
+                enable_pruning=enable_pruning,
             )
+        except optuna.TrialPruned:
+            raise
         except Exception as exc:
             logger.error("Trial %s failed during %s evaluation: %s", trial.number, fold_name, exc)
             logger.exception(exc)
@@ -450,7 +495,16 @@ def build_single_fold_objective(
     return objective
 
 
-def run_study(study_name, storage_path, summary_label, load_if_exists=True):
+def run_study(
+    study_name,
+    storage_path,
+    summary_label,
+    load_if_exists=True,
+    enable_pruning=True,
+    pruner_startup_trials=DEFAULT_PRUNER_STARTUP_TRIALS,
+    pruner_warmup_steps=DEFAULT_PRUNER_WARMUP_STEPS,
+    pruner_interval_steps=DEFAULT_PRUNER_INTERVAL_STEPS,
+):
     storage = f"sqlite:///{os.path.abspath(storage_path)}/{study_name}.db"
     logger.info("\n%s", "=" * 70)
     logger.info("%s", summary_label)
@@ -464,6 +518,12 @@ def run_study(study_name, storage_path, summary_label, load_if_exists=True):
         storage=storage,
         direction="maximize",
         load_if_exists=load_if_exists,
+        pruner=build_pruner(
+            enable_pruning=enable_pruning,
+            startup_trials=pruner_startup_trials,
+            warmup_steps=pruner_warmup_steps,
+            interval_steps=pruner_interval_steps,
+        ),
     )
     return study
 
@@ -503,6 +563,10 @@ def run_optimization(
     prompt_mode,
     resume=True,
     target_total_trials=None,
+    enable_pruning=DEFAULT_ENABLE_PRUNING,
+    pruner_startup_trials=DEFAULT_PRUNER_STARTUP_TRIALS,
+    pruner_warmup_steps=DEFAULT_PRUNER_WARMUP_STEPS,
+    pruner_interval_steps=DEFAULT_PRUNER_INTERVAL_STEPS,
 ):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
@@ -516,6 +580,10 @@ def run_optimization(
     logger.info("  Model Family: %s", model_family)
     logger.info("  Prompt Mode: %s", prompt_mode)
     logger.info("  Launch Input Mode: %s", resolve_launch_input_mode(model_family))
+    logger.info("  Pruning Enabled: %s", enable_pruning)
+    logger.info("  Pruner Startup Trials: %s", pruner_startup_trials)
+    logger.info("  Pruner Warmup Steps: %s", pruner_warmup_steps)
+    logger.info("  Pruner Interval Steps: %s", pruner_interval_steps)
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
@@ -532,6 +600,10 @@ def run_optimization(
         storage_path=storage_path,
         summary_label="Creating cv_mean study",
         load_if_exists=resume,
+        enable_pruning=enable_pruning,
+        pruner_startup_trials=pruner_startup_trials,
+        pruner_warmup_steps=pruner_warmup_steps,
+        pruner_interval_steps=pruner_interval_steps,
     )
 
     objective = build_objective(
@@ -542,6 +614,7 @@ def run_optimization(
         num_gpus=num_gpus,
         model_family=model_family,
         prompt_mode=prompt_mode,
+        enable_pruning=enable_pruning,
     )
 
     results_file = os.path.join(storage_path, f"{study_name}_results.json")
@@ -581,6 +654,10 @@ def run_optimization(
             "model_family": model_family,
             "prompt_mode": prompt_mode,
             "launch_input_mode": resolve_launch_input_mode(model_family),
+            "pruning_enabled": enable_pruning,
+            "pruner_startup_trials": pruner_startup_trials,
+            "pruner_warmup_steps": pruner_warmup_steps,
+            "pruner_interval_steps": pruner_interval_steps,
             "best_trial_number": best_trial.number if best_trial is not None else None,
             "best_mean_f1": float(best_trial.value) if best_trial is not None else None,
             "best_params": dict(best_trial.params) if best_trial is not None else None,
@@ -607,6 +684,10 @@ def run_per_fold_optimization(
     prompt_mode,
     resume=True,
     target_total_trials=None,
+    enable_pruning=DEFAULT_ENABLE_PRUNING,
+    pruner_startup_trials=DEFAULT_PRUNER_STARTUP_TRIALS,
+    pruner_warmup_steps=DEFAULT_PRUNER_WARMUP_STEPS,
+    pruner_interval_steps=DEFAULT_PRUNER_INTERVAL_STEPS,
 ):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
@@ -620,6 +701,10 @@ def run_per_fold_optimization(
     logger.info("  Model Family: %s", model_family)
     logger.info("  Prompt Mode: %s", prompt_mode)
     logger.info("  Launch Input Mode: %s", resolve_launch_input_mode(model_family))
+    logger.info("  Pruning Enabled: %s", enable_pruning)
+    logger.info("  Pruner Startup Trials: %s", pruner_startup_trials)
+    logger.info("  Pruner Warmup Steps: %s", pruner_warmup_steps)
+    logger.info("  Pruner Interval Steps: %s", pruner_interval_steps)
     logger.info("  Trials Per Fold: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
@@ -652,6 +737,10 @@ def run_per_fold_optimization(
             storage_path=storage_path,
             summary_label=f"Creating per_fold study for {fold_name}",
             load_if_exists=resume,
+            enable_pruning=enable_pruning,
+            pruner_startup_trials=pruner_startup_trials,
+            pruner_warmup_steps=pruner_warmup_steps,
+            pruner_interval_steps=pruner_interval_steps,
         )
         objective = build_single_fold_objective(
             cmdc_root=cmdc_root,
@@ -661,6 +750,7 @@ def run_per_fold_optimization(
             num_gpus=num_gpus,
             model_family=model_family,
             prompt_mode=prompt_mode,
+            enable_pruning=enable_pruning,
         )
 
         try:
@@ -695,6 +785,10 @@ def run_per_fold_optimization(
             "model_family": model_family,
             "prompt_mode": prompt_mode,
             "launch_input_mode": resolve_launch_input_mode(model_family),
+            "pruning_enabled": enable_pruning,
+            "pruner_startup_trials": pruner_startup_trials,
+            "pruner_warmup_steps": pruner_warmup_steps,
+            "pruner_interval_steps": pruner_interval_steps,
             "n_trials": len(study.trials),
             "n_completed": len(completed_trials),
             "cmdc_root": cmdc_root,
@@ -751,6 +845,10 @@ def run_per_fold_optimization(
         "model_family": model_family,
         "prompt_mode": prompt_mode,
         "launch_input_mode": resolve_launch_input_mode(model_family),
+        "pruning_enabled": enable_pruning,
+        "pruner_startup_trials": pruner_startup_trials,
+        "pruner_warmup_steps": pruner_warmup_steps,
+        "pruner_interval_steps": pruner_interval_steps,
         "trials_per_fold": n_trials,
         "cmdc_root": cmdc_root,
         "save_root": os.path.abspath(save_root),
@@ -823,6 +921,34 @@ def main():
         action="store_false",
         help="Fail if the study already exists instead of resuming it.",
     )
+    parser.add_argument(
+        "--enable-pruning",
+        dest="enable_pruning",
+        action="store_true",
+        default=env_flag("ENABLE_PRUNING", DEFAULT_ENABLE_PRUNING),
+        help="Enable Optuna median pruning (default: enabled).",
+    )
+    parser.add_argument(
+        "--disable-pruning",
+        dest="enable_pruning",
+        action="store_false",
+        help="Disable Optuna pruning and run every trial to completion.",
+    )
+    parser.add_argument(
+        "--pruner-startup-trials",
+        type=int,
+        default=int(os.environ.get("PRUNER_STARTUP_TRIALS", DEFAULT_PRUNER_STARTUP_TRIALS)),
+    )
+    parser.add_argument(
+        "--pruner-warmup-steps",
+        type=int,
+        default=int(os.environ.get("PRUNER_WARMUP_STEPS", DEFAULT_PRUNER_WARMUP_STEPS)),
+    )
+    parser.add_argument(
+        "--pruner-interval-steps",
+        type=int,
+        default=int(os.environ.get("PRUNER_INTERVAL_STEPS", DEFAULT_PRUNER_INTERVAL_STEPS)),
+    )
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -855,6 +981,10 @@ def main():
             prompt_mode=prompt_mode,
             resume=args.resume,
             target_total_trials=args.target_total_trials,
+            enable_pruning=args.enable_pruning,
+            pruner_startup_trials=args.pruner_startup_trials,
+            pruner_warmup_steps=args.pruner_warmup_steps,
+            pruner_interval_steps=args.pruner_interval_steps,
         )
     else:
         run_optimization(
@@ -869,6 +999,10 @@ def main():
             prompt_mode=prompt_mode,
             resume=args.resume,
             target_total_trials=args.target_total_trials,
+            enable_pruning=args.enable_pruning,
+            pruner_startup_trials=args.pruner_startup_trials,
+            pruner_warmup_steps=args.pruner_warmup_steps,
+            pruner_interval_steps=args.pruner_interval_steps,
         )
 
 

@@ -27,6 +27,10 @@ export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
+export ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
+export PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
+export PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
+export PRUNER_INTERVAL_STEPS="${PRUNER_INTERVAL_STEPS:-1}"
 
 case "$MODEL_FAMILY" in
     audio)
@@ -158,6 +162,10 @@ echo "========================================" | tee -a "$LOG_FILE"
 echo "Timestamp: $TIMESTAMP" | tee -a "$LOG_FILE"
 echo "Job ID: $SLURM_JOB_ID" | tee -a "$LOG_FILE"
 echo "Number of Trials: $N_TRIALS" | tee -a "$LOG_FILE"
+echo "Enable Pruning: $ENABLE_PRUNING" | tee -a "$LOG_FILE"
+echo "Pruner Startup Trials: $PRUNER_STARTUP_TRIALS" | tee -a "$LOG_FILE"
+echo "Pruner Warmup Steps: $PRUNER_WARMUP_STEPS" | tee -a "$LOG_FILE"
+echo "Pruner Interval Steps: $PRUNER_INTERVAL_STEPS" | tee -a "$LOG_FILE"
 echo "Study Name: $STUDY_NAME" | tee -a "$LOG_FILE"
 echo "Dataset Name: $DATASET_NAME" | tee -a "$LOG_FILE"
 echo "Model Family: $MODEL_FAMILY" | tee -a "$LOG_FILE"
@@ -219,6 +227,13 @@ stop_gpu_logger() {
 trap stop_gpu_logger EXIT
 start_gpu_logger
 
+PRUNING_FLAG="--disable-pruning"
+case "${ENABLE_PRUNING,,}" in
+    1|true|yes|on)
+        PRUNING_FLAG="--enable-pruning"
+        ;;
+esac
+
 python optuna_hpo/hpo.py \
     --n-trials "$N_TRIALS" \
     --study-name "$STUDY_NAME" \
@@ -227,7 +242,11 @@ python optuna_hpo/hpo.py \
     --dataset-name "$DATASET_NAME" \
     --model-family "$MODEL_FAMILY" \
     --prompt-mode "$PROMPT_MODE" \
-    --task-variant "$TASK_VARIANT" 2>&1 | tee -a "$LOG_FILE"
+    --task-variant "$TASK_VARIANT" \
+    --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
+    --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
+    --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
+    "$PRUNING_FLAG" 2>&1 | tee -a "$LOG_FILE"
 
 echo "" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"

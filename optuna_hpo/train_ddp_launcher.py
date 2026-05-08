@@ -9,8 +9,6 @@ import argparse
 import json
 import os
 import sys
-import tempfile
-from omegaconf import OmegaConf
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,6 +40,9 @@ def main():
     save_path = config_data["save_path"]
     model_family = os.environ.get("MODEL_FAMILY", "text").strip().lower()
     input_mode = config_data.get("input_mode", derive_input_mode(model_family))
+    progress_file = config_data.get("progress_file")
+    result_file = config_data.get("result_file")
+    stop_file = config_data.get("stop_file")
     
     # Create config for training
     cfg = Config()
@@ -80,6 +81,8 @@ def main():
     cfg.data.train_scp_filename = train_scp_file
     cfg.data.eval_scp_filename = eval_scp_file
     cfg.data.wav_type = wav_type
+    cfg.env.progress_file = progress_file or ""
+    cfg.env.stop_file = stop_file or ""
     
     # Run training
     trial_name = f"trial_{trial_number:03d}_lr{trial_params['lr']:.0e}_bs{trial_params['batch_size']}_r{trial_params['lora_r']}_a{trial_params['lora_alpha']}"
@@ -95,7 +98,6 @@ def main():
     # concatenate JSON payloads and break the Optuna parent process.
     rank = int(os.environ.get("RANK", "0"))
     if rank == 0:
-        result_file = os.path.join(tempfile.gettempdir(), f"optuna_trial_{trial_number}_result.json")
         results = {
             "trial_number": trial_number,
             "best_f1": best_f1,
@@ -103,10 +105,13 @@ def main():
             "input_mode": input_mode,
         }
 
-        with open(result_file, 'w') as f:
-            json.dump(results, f)
+        if result_file:
+            tmp_path = f"{result_file}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(results, f)
+            os.replace(tmp_path, result_file)
 
-        print(f"\nResults saved to: {result_file}")
+            print(f"\nResults saved to: {result_file}")
     sys.exit(0)
 
 

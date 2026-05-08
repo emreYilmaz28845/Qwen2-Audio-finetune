@@ -9,6 +9,10 @@ MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
 STUDY_MODE="${STUDY_MODE:-cv_mean}" # cv_mean or per_fold
+ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
+PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
+PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
+PRUNER_INTERVAL_STEPS="${PRUNER_INTERVAL_STEPS:-1}"
 
 case "${MODEL_FAMILY}:${PROMPT_MODE}" in
     audio:full|audio:audiotext|text:textonly)
@@ -28,6 +32,12 @@ SAVE_ROOT="${SAVE_ROOT:-output_model/optuna_cmdc_5fold_hpo/${PROMPT_MODE}/optuna
 STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_cmdc_5fold_${STUDY_MODE}}"
 LOG_DIR="${LOG_DIR:-logs/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
 NUM_GPUS="${NUM_GPUS:-4}"
+PRUNING_FLAG="--disable-pruning"
+case "${ENABLE_PRUNING,,}" in
+    1|true|yes|on)
+        PRUNING_FLAG="--enable-pruning"
+        ;;
+esac
 
 echo "======================================"
 echo "CMDC 5-Fold Cross-Validated HPO"
@@ -36,6 +46,10 @@ echo "Model Family: $MODEL_FAMILY"
 echo "Prompt Mode: $PROMPT_MODE"
 echo "Study Mode: $STUDY_MODE"
 echo "Number of Trials: $N_TRIALS"
+echo "Enable Pruning: $ENABLE_PRUNING"
+echo "Pruner Startup Trials: $PRUNER_STARTUP_TRIALS"
+echo "Pruner Warmup Steps: $PRUNER_WARMUP_STEPS"
+echo "Pruner Interval Steps: $PRUNER_INTERVAL_STEPS"
 echo "Study Name: $STUDY_NAME"
 echo "Folds: $FOLDS"
 echo "CMDC Root: $CMDC_ROOT"
@@ -51,6 +65,10 @@ if [ -d "/gpfs/projects/etur92" ]; then
     MODEL_FAMILY="$MODEL_FAMILY" \
     PROMPT_MODE="$PROMPT_MODE" \
     N_TRIALS="$N_TRIALS" \
+    ENABLE_PRUNING="$ENABLE_PRUNING" \
+    PRUNER_STARTUP_TRIALS="$PRUNER_STARTUP_TRIALS" \
+    PRUNER_WARMUP_STEPS="$PRUNER_WARMUP_STEPS" \
+    PRUNER_INTERVAL_STEPS="$PRUNER_INTERVAL_STEPS" \
     STUDY_NAME="$STUDY_NAME" \
     FOLDS="$FOLDS" \
     STUDY_MODE="$STUDY_MODE" \
@@ -95,7 +113,11 @@ else
         --num-gpus "$NUM_GPUS" \
         --model-family "$MODEL_FAMILY" \
         --prompt-mode "$PROMPT_MODE" \
-        --study-mode "$STUDY_MODE"
+        --study-mode "$STUDY_MODE" \
+        --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
+        --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
+        --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
+        "$PRUNING_FLAG"
 fi
 
 echo ""

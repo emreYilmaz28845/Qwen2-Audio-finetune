@@ -9,6 +9,10 @@ DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
+ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
+PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
+PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
+PRUNER_INTERVAL_STEPS="${PRUNER_INTERVAL_STEPS:-1}"
 
 case "${MODEL_FAMILY}:${PROMPT_MODE}" in
     audio:full|audio:audiotext|text:textonly)
@@ -36,6 +40,12 @@ STUDY_NAME=${2:-$STUDY_NAME_DEFAULT}
 STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_${DATASET_NAME}}"
 SAVE_PATH="${SAVE_PATH:-output_model/optuna_${DATASET_NAME}_hpo/${PROMPT_MODE}}"
 LOG_DIR="${LOG_DIR:-logs/optuna_${DATASET_NAME}}"
+PRUNING_FLAG="--disable-pruning"
+case "${ENABLE_PRUNING,,}" in
+    1|true|yes|on)
+        PRUNING_FLAG="--enable-pruning"
+        ;;
+esac
 
 echo "======================================"
 echo "Single-Dataset Optuna Hyperparameter Search"
@@ -45,6 +55,10 @@ echo "Model Family: $MODEL_FAMILY"
 echo "Prompt Mode: $PROMPT_MODE"
 echo "Task Variant: $TASK_VARIANT"
 echo "Number of Trials: $N_TRIALS"
+echo "Enable Pruning: $ENABLE_PRUNING"
+echo "Pruner Startup Trials: $PRUNER_STARTUP_TRIALS"
+echo "Pruner Warmup Steps: $PRUNER_WARMUP_STEPS"
+echo "Pruner Interval Steps: $PRUNER_INTERVAL_STEPS"
 echo "Study Name: $STUDY_NAME"
 echo "Storage Path: $STORAGE_PATH"
 echo "Save Path: $SAVE_PATH"
@@ -60,6 +74,10 @@ if [ -d "/gpfs/projects/etur92" ]; then
     PROMPT_MODE="$PROMPT_MODE" \
     TASK_VARIANT="$TASK_VARIANT" \
     N_TRIALS="$N_TRIALS" \
+    ENABLE_PRUNING="$ENABLE_PRUNING" \
+    PRUNER_STARTUP_TRIALS="$PRUNER_STARTUP_TRIALS" \
+    PRUNER_WARMUP_STEPS="$PRUNER_WARMUP_STEPS" \
+    PRUNER_INTERVAL_STEPS="$PRUNER_INTERVAL_STEPS" \
     STUDY_NAME="$STUDY_NAME" \
     STORAGE_PATH="$STORAGE_PATH" \
     SAVE_PATH="$SAVE_PATH" \
@@ -81,7 +99,11 @@ else
         --dataset-name "$DATASET_NAME" \
         --model-family "$MODEL_FAMILY" \
         --prompt-mode "$PROMPT_MODE" \
-        --task-variant "$TASK_VARIANT"
+        --task-variant "$TASK_VARIANT" \
+        --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
+        --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
+        --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
+        "$PRUNING_FLAG"
 fi
 
 echo ""

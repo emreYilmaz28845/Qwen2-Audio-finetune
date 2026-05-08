@@ -4,16 +4,78 @@ Launcher wrapper for DDP-based Optuna trial training.
 This script is called by Optuna to launch training on 4 GPUs using torchrun.
 """
 
-import subprocess
-import sys
-import os
-import json
-import pickle
-import tempfile
 import argparse
+import json
+import os
+import signal
+import subprocess
+import tempfile
+import time
+
+import optuna
+
+
+def _write_json_atomic(path: str, payload: dict):
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    os.replace(tmp_path, path)
+
+
+def _read_progress(path: str):
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    step = payload.get("step")
+    metric = payload.get("metric")
+    if not isinstance(step, int):
+        return None
+    if not isinstance(metric, (int, float)):
+        return None
+    return {"step": step, "metric": float(metric)}
+
+
+def _terminate_process_group(process: subprocess.Popen):
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.terminate()
+
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if process.poll() is not None:
+            return
+        time.sleep(0.2)
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.kill()
+
+
+def _cleanup_temp_files(*paths):
+    for path in paths:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def launch_ddp_training(
+    trial: optuna.Trial | None,
     trial_params: dict,
     trial_number: int,
     model_path: str,
@@ -21,7 +83,9 @@ def launch_ddp_training(
     eval_data_path: str,
     save_path: str,
     input_mode: str = "textonly",
-    num_gpus: int = 4
+    num_gpus: int = 4,
+    enable_pruning: bool = True,
+    prune_mode: str = "eval",
 ) -> float:
     """
     Launch DDP training for a single Optuna trial.
@@ -39,10 +103,12 @@ def launch_ddp_training(
         best_f1: Best F1 score from the trial
     """
     
-    # Create temporary JSON file with trial params
     temp_dir = tempfile.gettempdir()
     trial_config_file = os.path.join(temp_dir, f"optuna_trial_{trial_number}.json")
-    
+    progress_file = os.path.join(temp_dir, f"optuna_trial_{trial_number}_progress.json")
+    result_file = os.path.join(temp_dir, f"optuna_trial_{trial_number}_result.json")
+    stop_file = os.path.join(temp_dir, f"optuna_trial_{trial_number}_stop")
+
     config_data = {
         "trial_number": trial_number,
         "trial_params": trial_params,
@@ -51,22 +117,24 @@ def launch_ddp_training(
         "eval_data_path": eval_data_path,
         "save_path": save_path,
         "input_mode": input_mode,
+        "progress_file": progress_file,
+        "result_file": result_file,
+        "stop_file": stop_file,
+        "prune_mode": prune_mode,
     }
-    
-    with open(trial_config_file, 'w') as f:
-        json.dump(config_data, f)
-    
-    # Get the directory where this script is located
+
+    _cleanup_temp_files(trial_config_file, progress_file, result_file, stop_file)
+    _write_json_atomic(trial_config_file, config_data)
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Build torchrun command
+
     cmd = [
         "torchrun",
         f"--nproc_per_node={num_gpus}",
         os.path.join(script_dir, "train_ddp_launcher.py"),
-        f"--config-file={trial_config_file}"
+        f"--config-file={trial_config_file}",
     ]
-    
+
     print(f"\n{'='*70}")
     print(f"Launching Trial {trial_number} with DDP on {num_gpus} GPUs")
     print(f"  LR: {trial_params['lr']:.2e}")
@@ -74,32 +142,51 @@ def launch_ddp_training(
     print(f"  LoRA R: {trial_params['lora_r']}")
     print(f"  LoRA Alpha: {trial_params['lora_alpha']}")
     print(f"  Input Mode: {input_mode}")
+    print(f"  Prune Mode: {prune_mode}")
     print(f"Command: {' '.join(cmd)}")
     print(f"{'='*70}\n")
-    
-    # Run torchrun
+
     try:
-        result = subprocess.run(cmd, check=True, capture_output=False)
-    except subprocess.CalledProcessError as e:
-        print(f"Error launching trial {trial_number}: {e}")
-        return -1.0
-    
-    # Read results from output files
-    result_file = os.path.join(temp_dir, f"optuna_trial_{trial_number}_result.json")
-    if os.path.exists(result_file):
-        with open(result_file, 'r') as f:
-            results = json.load(f)
-        best_f1 = results.get("best_f1", -1.0)
-        os.remove(result_file)
-    else:
-        print(f"Warning: Result file not found at {result_file}")
-        best_f1 = -1.0
-    
-    # Clean up config file
-    if os.path.exists(trial_config_file):
-        os.remove(trial_config_file)
-    
-    return best_f1
+        process = subprocess.Popen(cmd, start_new_session=True)
+        last_reported_step = -1
+
+        while True:
+            progress = _read_progress(progress_file)
+            if (
+                enable_pruning
+                and trial is not None
+                and prune_mode == "eval"
+                and progress is not None
+                and progress["step"] > last_reported_step
+            ):
+                last_reported_step = progress["step"]
+                trial.report(progress["metric"], step=progress["step"])
+                if trial.should_prune():
+                    _write_json_atomic(stop_file, {"reason": "optuna_pruned", "step": progress["step"]})
+                    _terminate_process_group(process)
+                    raise optuna.TrialPruned(
+                        f"Trial {trial_number} pruned at eval step {progress['step']} with F1={progress['metric']:.4f}"
+                    )
+
+            return_code = process.poll()
+            if return_code is not None:
+                if return_code != 0:
+                    print(f"Error launching trial {trial_number}: torchrun exited with code {return_code}")
+                    return -1.0
+                break
+            time.sleep(5)
+
+        if os.path.exists(result_file):
+            with open(result_file, "r", encoding="utf-8") as handle:
+                results = json.load(handle)
+            best_f1 = results.get("best_f1", -1.0)
+        else:
+            print(f"Warning: Result file not found at {result_file}")
+            best_f1 = -1.0
+
+        return best_f1
+    finally:
+        _cleanup_temp_files(trial_config_file, progress_file, result_file, stop_file)
 
 
 if __name__ == "__main__":
@@ -121,13 +208,16 @@ if __name__ == "__main__":
     }
     
     best_f1 = launch_ddp_training(
+        trial=None,
         trial_params=trial_params,
         trial_number=args.trial_number,
         model_path=os.environ.get("MODEL_PATH", "/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct"),
         train_data_path=os.environ.get("TRAIN_DATA_PATH", "Qwen2-Audio-finetune/data/merged/train"),
         eval_data_path=os.environ.get("EVAL_DATA_PATH", "Qwen2-Audio-finetune/data/merged/val"),
         save_path=os.environ.get("SAVE_PATH", "output_model/optuna"),
-        num_gpus=args.num_gpus
+        num_gpus=args.num_gpus,
+        enable_pruning=False,
+        prune_mode="disabled",
     )
-    
+
     print(f"\nTrial {args.trial_number} completed with F1 = {best_f1:.4f}")

@@ -38,6 +38,10 @@ Supported user-facing variables:
 - `MODEL_FAMILY=audio|text`
 - `PROMPT_MODE=full|audiotext|textonly`
 - `TASK_VARIANT=default|filtered`
+- `ENABLE_PRUNING=1|0`
+- `PRUNER_STARTUP_TRIALS=<int>`
+- `PRUNER_WARMUP_STEPS=<int>`
+- `PRUNER_INTERVAL_STEPS=<int>`
 
 Allowed mode combinations:
 
@@ -65,6 +69,10 @@ Supported user-facing variables:
 - `MODEL_FAMILY=audio|text`
 - `PROMPT_MODE=full|audiotext|textonly`
 - `STUDY_MODE=cv_mean|per_fold`
+- `ENABLE_PRUNING=1|0`
+- `PRUNER_STARTUP_TRIALS=<int>`
+- `PRUNER_WARMUP_STEPS=<int>`
+- `PRUNER_INTERVAL_STEPS=<int>`
 
 ### Single manual trial
 
@@ -136,6 +144,26 @@ Current search space:
 | `lora_alpha` | `8, 16, 24, 32` |
 
 Objective: maximize validation F1.
+
+## Median Pruning
+
+Median pruning is enabled by default with conservative settings:
+
+- `ENABLE_PRUNING=1`
+- `PRUNER_STARTUP_TRIALS=5`
+- `PRUNER_WARMUP_STEPS=2`
+- `PRUNER_INTERVAL_STEPS=1`
+
+Pruning behavior depends on study mode:
+
+- single-dataset HPO in `hpo.py`: pruning uses intermediate validation F1 at each evaluation event
+- CMDC `per_fold`: pruning uses intermediate validation F1 within each fold-specific study
+- CMDC `cv_mean`: pruning happens only between folds using the partial mean F1 of completed folds
+
+Step semantics:
+
+- single-dataset and `per_fold`: one Optuna step = one validation event
+- `cv_mean`: one Optuna step = one completed fold
 
 ## Quick Start
 
@@ -352,6 +380,8 @@ Optuna objective
   -> torchrun train_ddp_launcher.py
   -> train_ddp(...)
 ```
+
+When pruning is enabled, `train_launcher.py` polls intermediate progress from the DDP child, reports it to Optuna, and terminates the subprocess early when the pruner decides to stop a weak trial.
 
 The single manual trial uses the same lower-level launch path.
 

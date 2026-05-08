@@ -27,6 +27,14 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from optuna_hpo.train_launcher import launch_ddp_training
+from optuna_hpo.pruning import (
+    DEFAULT_ENABLE_PRUNING,
+    DEFAULT_PRUNER_INTERVAL_STEPS,
+    DEFAULT_PRUNER_STARTUP_TRIALS,
+    DEFAULT_PRUNER_WARMUP_STEPS,
+    build_pruner,
+    env_flag,
+)
 
 
 logging.basicConfig(
@@ -185,7 +193,14 @@ def apply_dataset_env(dataset_cfg: DatasetConfig):
     os.environ["EVAL_DATA_PATH"] = dataset_cfg.eval_data_path
 
 
-def build_objective(dataset_cfg: DatasetConfig, model_path: str, save_root: str, num_gpus: int, model_family: str):
+def build_objective(
+    dataset_cfg: DatasetConfig,
+    model_path: str,
+    save_root: str,
+    num_gpus: int,
+    model_family: str,
+    enable_pruning: bool,
+):
     launch_input_mode = resolve_launch_input_mode(model_family)
 
     def objective(trial: optuna.Trial):
@@ -214,6 +229,7 @@ def build_objective(dataset_cfg: DatasetConfig, model_path: str, save_root: str,
         }
 
         best_f1 = launch_ddp_training(
+            trial=trial,
             trial_params=trial_params,
             trial_number=trial.number,
             model_path=model_path,
@@ -222,6 +238,8 @@ def build_objective(dataset_cfg: DatasetConfig, model_path: str, save_root: str,
             save_path=save_root,
             input_mode=launch_input_mode,
             num_gpus=num_gpus,
+            enable_pruning=enable_pruning,
+            prune_mode="eval" if enable_pruning else "disabled",
         )
 
         logger.info("\nTrial %s completed with Best F1: %.4f\n", trial.number, best_f1)
@@ -239,6 +257,10 @@ def run_optimization(
     prompt_mode=PROMPT_MODE_TEXTONLY,
     task_variant=TASK_VARIANT_DEFAULT,
     save_root=None,
+    enable_pruning=DEFAULT_ENABLE_PRUNING,
+    pruner_startup_trials=DEFAULT_PRUNER_STARTUP_TRIALS,
+    pruner_warmup_steps=DEFAULT_PRUNER_WARMUP_STEPS,
+    pruner_interval_steps=DEFAULT_PRUNER_INTERVAL_STEPS,
 ):
     validate_mode_combination(model_family, prompt_mode)
     dataset_cfg = get_dataset_config(dataset_name, prompt_mode, task_variant)
@@ -270,6 +292,10 @@ def run_optimization(
     logger.info("  Prompt Mode: %s", prompt_mode)
     logger.info("  Task Variant: %s", task_variant)
     logger.info("  Launch Input Mode: %s", launch_input_mode)
+    logger.info("  Pruning Enabled: %s", enable_pruning)
+    logger.info("  Pruner Startup Trials: %s", pruner_startup_trials)
+    logger.info("  Pruner Warmup Steps: %s", pruner_warmup_steps)
+    logger.info("  Pruner Interval Steps: %s", pruner_interval_steps)
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  Storage: %s", storage)
     logger.info("  Save Root: %s", save_root)
@@ -280,6 +306,12 @@ def run_optimization(
         storage=storage,
         direction="maximize",
         load_if_exists=True,
+        pruner=build_pruner(
+            enable_pruning=enable_pruning,
+            startup_trials=pruner_startup_trials,
+            warmup_steps=pruner_warmup_steps,
+            interval_steps=pruner_interval_steps,
+        ),
     )
 
     objective = build_objective(
@@ -288,6 +320,7 @@ def run_optimization(
         save_root=save_root,
         num_gpus=num_gpus,
         model_family=model_family,
+        enable_pruning=enable_pruning,
     )
 
     try:
@@ -299,23 +332,32 @@ def run_optimization(
     logger.info("Optimization Results")
     logger.info("%s\n", "=" * 70)
 
-    best_trial = study.best_trial
-    logger.info("Best Trial: #%s", best_trial.number)
-    logger.info("Best F1 Score: %.4f\n", best_trial.value)
-    logger.info("Best Hyperparameters:")
-    for key, value in best_trial.params.items():
-        logger.info("  %s: %s", key, value)
+    completed_trials = [
+        trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE
+    ]
+    best_trial = study.best_trial if completed_trials else None
+    if best_trial is not None:
+        logger.info("Best Trial: #%s", best_trial.number)
+        logger.info("Best F1 Score: %.4f\n", best_trial.value)
+        logger.info("Best Hyperparameters:")
+        for key, value in best_trial.params.items():
+            logger.info("  %s: %s", key, value)
+    else:
+        logger.info("No completed trials are available to summarize.")
 
     trials_df = study.trials_dataframe()
-    completed_trials = trials_df[trials_df["state"] == "COMPLETE"].sort_values("value", ascending=False)
+    completed_trials_df = trials_df[trials_df["state"] == "COMPLETE"].sort_values("value", ascending=False)
     logger.info("\n%s", "=" * 70)
     logger.info("All Completed Trials (sorted by F1 score)")
     logger.info("%s\n", "=" * 70)
-    logger.info(
-        completed_trials[
-            ["number", "value", "params_lr", "params_batch_size", "params_lora_r", "params_lora_alpha"]
-        ].to_string()
-    )
+    if completed_trials_df.empty:
+        logger.info("No completed trials")
+    else:
+        logger.info(
+            completed_trials_df[
+                ["number", "value", "params_lr", "params_batch_size", "params_lora_r", "params_lora_alpha"]
+            ].to_string()
+        )
 
     results_file = os.path.join(storage_path, f"{study_name}_results.json")
     results = {
@@ -325,25 +367,25 @@ def run_optimization(
         "prompt_mode": prompt_mode,
         "task_variant": task_variant,
         "launch_input_mode": launch_input_mode,
+        "pruning_enabled": enable_pruning,
+        "pruner_startup_trials": pruner_startup_trials,
+        "pruner_warmup_steps": pruner_warmup_steps,
+        "pruner_interval_steps": pruner_interval_steps,
         "n_trials": len(study.trials),
-        "n_completed": len(completed_trials),
-        "best_trial_number": best_trial.number,
-        "best_f1": float(best_trial.value),
-        "best_params": best_trial.params,
+        "n_completed": len(completed_trials_df),
+        "best_trial_number": best_trial.number if best_trial is not None else None,
+        "best_f1": float(best_trial.value) if best_trial is not None else None,
+        "best_params": dict(best_trial.params) if best_trial is not None else None,
         "all_trials": [],
     }
 
-    for _, row in completed_trials.iterrows():
+    for trial in study.trials:
         results["all_trials"].append(
             {
-                "trial_number": int(row["number"]),
-                "f1": float(row["value"]),
-                "params": {
-                    "lr": row["params_lr"],
-                    "batch_size": int(row["params_batch_size"]),
-                    "lora_r": int(row["params_lora_r"]),
-                    "lora_alpha": int(row["params_lora_alpha"]),
-                },
+                "trial_number": int(trial.number),
+                "f1": None if trial.value is None else float(trial.value),
+                "state": trial.state.name,
+                "params": dict(trial.params),
             }
         )
 
@@ -398,6 +440,34 @@ if __name__ == "__main__":
         choices=[TASK_VARIANT_DEFAULT, TASK_VARIANT_FILTERED],
         default=os.environ.get("TASK_VARIANT", TASK_VARIANT_DEFAULT),
     )
+    parser.add_argument(
+        "--enable-pruning",
+        dest="enable_pruning",
+        action="store_true",
+        default=env_flag("ENABLE_PRUNING", DEFAULT_ENABLE_PRUNING),
+        help="Enable Optuna median pruning (default: enabled).",
+    )
+    parser.add_argument(
+        "--disable-pruning",
+        dest="enable_pruning",
+        action="store_false",
+        help="Disable Optuna pruning and run every trial to completion.",
+    )
+    parser.add_argument(
+        "--pruner-startup-trials",
+        type=int,
+        default=int(os.environ.get("PRUNER_STARTUP_TRIALS", DEFAULT_PRUNER_STARTUP_TRIALS)),
+    )
+    parser.add_argument(
+        "--pruner-warmup-steps",
+        type=int,
+        default=int(os.environ.get("PRUNER_WARMUP_STEPS", DEFAULT_PRUNER_WARMUP_STEPS)),
+    )
+    parser.add_argument(
+        "--pruner-interval-steps",
+        type=int,
+        default=int(os.environ.get("PRUNER_INTERVAL_STEPS", DEFAULT_PRUNER_INTERVAL_STEPS)),
+    )
 
     args = parser.parse_args()
 
@@ -416,4 +486,8 @@ if __name__ == "__main__":
         prompt_mode=args.prompt_mode,
         task_variant=args.task_variant,
         save_root=args.save_root,
+        enable_pruning=args.enable_pruning,
+        pruner_startup_trials=args.pruner_startup_trials,
+        pruner_warmup_steps=args.pruner_warmup_steps,
+        pruner_interval_steps=args.pruner_interval_steps,
     )

@@ -58,6 +58,10 @@ export CMDC_ROOT="${CMDC_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Au
 export NUM_GPUS="${NUM_GPUS:-4}"
 export FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
 export STUDY_MODE="${STUDY_MODE:-cv_mean}" # per_fold or cv_mean
+export ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
+export PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
+export PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
+export PRUNER_INTERVAL_STEPS="${PRUNER_INTERVAL_STEPS:-1}"
 export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
 export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
 export SAVE_ROOT="${SAVE_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
@@ -95,6 +99,10 @@ echo "========================================" | tee -a "$LOG_FILE"
 echo "Timestamp: $TIMESTAMP" | tee -a "$LOG_FILE"
 echo "Job ID: $SLURM_JOB_ID" | tee -a "$LOG_FILE"
 echo "Number of CV Trials: $N_TRIALS" | tee -a "$LOG_FILE"
+echo "Enable Pruning: $ENABLE_PRUNING" | tee -a "$LOG_FILE"
+echo "Pruner Startup Trials: $PRUNER_STARTUP_TRIALS" | tee -a "$LOG_FILE"
+echo "Pruner Warmup Steps: $PRUNER_WARMUP_STEPS" | tee -a "$LOG_FILE"
+echo "Pruner Interval Steps: $PRUNER_INTERVAL_STEPS" | tee -a "$LOG_FILE"
 echo "Target Total Completed Trials: ${TARGET_TOTAL_TRIALS:-disabled}" | tee -a "$LOG_FILE"
 echo "Study Name: $STUDY_NAME" | tee -a "$LOG_FILE"
 echo "Study Mode: $STUDY_MODE" | tee -a "$LOG_FILE"
@@ -160,6 +168,13 @@ if [ -n "$TARGET_TOTAL_TRIALS" ]; then
     TARGET_TOTAL_ARGS=(--target-total-trials "$TARGET_TOTAL_TRIALS")
 fi
 
+PRUNING_FLAG="--disable-pruning"
+case "${ENABLE_PRUNING,,}" in
+    1|true|yes|on)
+        PRUNING_FLAG="--enable-pruning"
+        ;;
+esac
+
 python optuna_hpo/hpo_cv_5fold.py \
     --n-trials "$N_TRIALS" \
     --study-name "$STUDY_NAME" \
@@ -171,6 +186,10 @@ python optuna_hpo/hpo_cv_5fold.py \
     --model-family "$MODEL_FAMILY" \
     --prompt-mode "$PROMPT_MODE" \
     --study-mode "$STUDY_MODE" \
+    --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
+    --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
+    --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
+    "$PRUNING_FLAG" \
     "${TARGET_TOTAL_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
 
 echo "" | tee -a "$LOG_FILE"

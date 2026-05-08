@@ -185,6 +185,32 @@ def save_audio_adapter_state(model, save_dir):
     return adapter_state_path
 
 
+def _write_json_atomic(path: str, payload: dict):
+    if not path:
+        return
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    os.replace(tmp_path, path)
+
+
+def _check_stop_requested(stop_file: str):
+    if stop_file and os.path.exists(stop_file):
+        raise RuntimeError("Trial stopped due to pruning request")
+
+
+def _report_progress(progress_file: str, step: int, metric: float):
+    if not progress_file:
+        return
+    _write_json_atomic(
+        progress_file,
+        {
+            "step": int(step),
+            "metric": float(metric),
+        },
+    )
+
+
 def _setup_run(cfg, trial_name):
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -436,6 +462,7 @@ def train_textonly_ddp(cfg, trial_name=""):
     best_f1 = -math.inf
     global_train_step = 0
     optimizer_step = 0
+    eval_step_idx = 0
 
     for epoch in range(cfg.train.train_epoch):
         train_sampler.set_epoch(epoch)
@@ -445,6 +472,7 @@ def train_textonly_ddp(cfg, trial_name=""):
         grad_acc_steps = max(1, int(cfg.train.grad_accumulate_step))
 
         for train_step, batch in enumerate(train_bar):
+            _check_stop_requested(getattr(cfg.env, "stop_file", ""))
             global_train_step += 1
             batch = {key: value.to(device) for key, value in batch.items()}
 
@@ -471,9 +499,11 @@ def train_textonly_ddp(cfg, trial_name=""):
                     model, eval_dataloader, device, metric_processor, rank
                 )
                 if rank == 0:
+                    eval_step_idx += 1
                     eval_accuracy, eval_precision, eval_recall, eval_f1, eval_wf1 = compute_metrics_from_stats(
                         reduced_stats
                     )
+                    _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
                     logger.info("[Epoch %s Step %s] Eval Metrics:", epoch, train_step)
                     logger.info(
                         "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
@@ -643,6 +673,7 @@ def train_audiotext_ddp(cfg, trial_name=""):
 
     best_f1 = -math.inf
     global_train_step = 0
+    eval_step_idx = 0
 
     for epoch in range(cfg.train.train_epoch):
         train_sampler.set_epoch(epoch)
@@ -652,6 +683,7 @@ def train_audiotext_ddp(cfg, trial_name=""):
         grad_acc_steps = max(1, int(cfg.train.grad_accumulate_step))
 
         for train_step, batch in enumerate(train_bar):
+            _check_stop_requested(getattr(cfg.env, "stop_file", ""))
             global_train_step += 1
             batch = batch.to(device)
 
@@ -675,9 +707,11 @@ def train_audiotext_ddp(cfg, trial_name=""):
             if (train_step + 1) % dynamic_eval_step == 0:
                 eval_loss, reduced_stats = _evaluate(model, eval_dataloader, device, processor, rank)
                 if rank == 0:
+                    eval_step_idx += 1
                     eval_accuracy, eval_precision, eval_recall, eval_f1, eval_wf1 = compute_metrics_from_stats(
                         reduced_stats
                     )
+                    _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
                     logger.info("[Epoch %s Step %s] Eval Metrics:", epoch, train_step)
                     logger.info(
                         "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
