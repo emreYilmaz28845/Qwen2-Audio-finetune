@@ -37,9 +37,12 @@ class EvalConfig:
     batch_size: int = 2
     local_rank : int = 0
     peft_path: str = ""
+    daic_eval_mode: str = "majority_vote"
+    daic_person_threshold: float = 0.5
 
 @dataclass
 class DataConfig:
+    dataset_name: str = "daic_woz"
     train_data_path: str = "Qwen2-Audio-finetune/data/daic_woz/train"
     eval_data_path: str = "Qwen2-Audio-finetune/data/daic_woz/val"
     train_prompt_path: str = "Qwen2-Audio-finetune/data/daic_woz/train/daic_woz_multiprompt.jsonl"

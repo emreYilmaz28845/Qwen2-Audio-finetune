@@ -27,6 +27,8 @@ export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
+export DAIC_EVAL_MODE="${DAIC_EVAL_MODE:-majority_vote}" # majority_vote, mean_probability, or max_probability
+export DAIC_PERSON_THRESHOLD="${DAIC_PERSON_THRESHOLD:-0.5}"
 export ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
 export PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
 export PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
@@ -171,6 +173,8 @@ echo "Dataset Name: $DATASET_NAME" | tee -a "$LOG_FILE"
 echo "Model Family: $MODEL_FAMILY" | tee -a "$LOG_FILE"
 echo "Prompt Mode: $PROMPT_MODE" | tee -a "$LOG_FILE"
 echo "Task Variant: $TASK_VARIANT" | tee -a "$LOG_FILE"
+echo "DAIC Eval Mode: $DAIC_EVAL_MODE" | tee -a "$LOG_FILE"
+echo "DAIC Person Threshold: $DAIC_PERSON_THRESHOLD" | tee -a "$LOG_FILE"
 echo "Launch Input Mode (derived): $LAUNCH_INPUT_MODE" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Train Data Path: $TRAIN_DATA_PATH" | tee -a "$LOG_FILE"
@@ -243,6 +247,8 @@ python optuna_hpo/hpo.py \
     --model-family "$MODEL_FAMILY" \
     --prompt-mode "$PROMPT_MODE" \
     --task-variant "$TASK_VARIANT" \
+    --daic-eval-mode "$DAIC_EVAL_MODE" \
+    --daic-person-threshold "$DAIC_PERSON_THRESHOLD" \
     --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
     --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
     --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \

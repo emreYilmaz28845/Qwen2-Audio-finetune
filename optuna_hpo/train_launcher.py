@@ -82,10 +82,13 @@ def launch_ddp_training(
     train_data_path: str,
     eval_data_path: str,
     save_path: str,
+    dataset_name: str,
     input_mode: str = "textonly",
     num_gpus: int = 4,
     enable_pruning: bool = True,
     prune_mode: str = "eval",
+    daic_eval_mode: str = "majority_vote",
+    daic_person_threshold: float = 0.5,
 ) -> float:
     """
     Launch DDP training for a single Optuna trial.
@@ -116,11 +119,14 @@ def launch_ddp_training(
         "train_data_path": train_data_path,
         "eval_data_path": eval_data_path,
         "save_path": save_path,
+        "dataset_name": dataset_name,
         "input_mode": input_mode,
         "progress_file": progress_file,
         "result_file": result_file,
         "stop_file": stop_file,
         "prune_mode": prune_mode,
+        "daic_eval_mode": daic_eval_mode,
+        "daic_person_threshold": float(daic_person_threshold),
     }
 
     _cleanup_temp_files(trial_config_file, progress_file, result_file, stop_file)
@@ -141,8 +147,11 @@ def launch_ddp_training(
     print(f"  Batch Size: {trial_params['batch_size']}")
     print(f"  LoRA R: {trial_params['lora_r']}")
     print(f"  LoRA Alpha: {trial_params['lora_alpha']}")
+    print(f"  Dataset: {dataset_name}")
     print(f"  Input Mode: {input_mode}")
     print(f"  Prune Mode: {prune_mode}")
+    print(f"  DAIC Eval Mode: {daic_eval_mode}")
+    print(f"  DAIC Person Threshold: {daic_person_threshold}")
     print(f"Command: {' '.join(cmd)}")
     print(f"{'='*70}\n")
 
@@ -215,9 +224,12 @@ if __name__ == "__main__":
         train_data_path=os.environ.get("TRAIN_DATA_PATH", "Qwen2-Audio-finetune/data/merged/train"),
         eval_data_path=os.environ.get("EVAL_DATA_PATH", "Qwen2-Audio-finetune/data/merged/val"),
         save_path=os.environ.get("SAVE_PATH", "output_model/optuna"),
+        dataset_name=os.environ.get("DATASET_NAME", "merged"),
         num_gpus=args.num_gpus,
         enable_pruning=False,
         prune_mode="disabled",
+        daic_eval_mode=os.environ.get("DAIC_EVAL_MODE", "majority_vote"),
+        daic_person_threshold=float(os.environ.get("DAIC_PERSON_THRESHOLD", "0.5")),
     )
 
     print(f"\nTrial {args.trial_number} completed with F1 = {best_f1:.4f}")

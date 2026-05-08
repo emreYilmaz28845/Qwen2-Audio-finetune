@@ -280,6 +280,7 @@ def run_fold_trial(
             train_data_path=fold_cfg["train_data_path"],
             eval_data_path=fold_cfg["eval_data_path"],
             save_path=fold_save_path,
+            dataset_name="cmdc",
             input_mode=launch_input_mode,
             num_gpus=num_gpus,
             enable_pruning=enable_pruning,

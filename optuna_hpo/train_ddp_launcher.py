@@ -38,11 +38,16 @@ def main():
     train_data_path = config_data["train_data_path"]
     eval_data_path = config_data["eval_data_path"]
     save_path = config_data["save_path"]
+    dataset_name = config_data.get("dataset_name", os.environ.get("DATASET_NAME", "merged"))
     model_family = os.environ.get("MODEL_FAMILY", "text").strip().lower()
     input_mode = config_data.get("input_mode", derive_input_mode(model_family))
     progress_file = config_data.get("progress_file")
     result_file = config_data.get("result_file")
     stop_file = config_data.get("stop_file")
+    daic_eval_mode = config_data.get("daic_eval_mode", os.environ.get("DAIC_EVAL_MODE", "majority_vote"))
+    daic_person_threshold = float(
+        config_data.get("daic_person_threshold", os.environ.get("DAIC_PERSON_THRESHOLD", "0.5"))
+    )
     
     # Create config for training
     cfg = Config()
@@ -57,6 +62,7 @@ def main():
     cfg.env.model_path = model_path
     cfg.data.train_data_path = train_data_path
     cfg.data.eval_data_path = eval_data_path
+    cfg.data.dataset_name = dataset_name
     cfg.env.save_path = save_path
     
     # Override prompt/scp/task file paths from environment variables
@@ -83,6 +89,8 @@ def main():
     cfg.data.wav_type = wav_type
     cfg.env.progress_file = progress_file or ""
     cfg.env.stop_file = stop_file or ""
+    cfg.eval.daic_eval_mode = daic_eval_mode
+    cfg.eval.daic_person_threshold = daic_person_threshold
     
     # Run training
     trial_name = f"trial_{trial_number:03d}_lr{trial_params['lr']:.0e}_bs{trial_params['batch_size']}_r{trial_params['lora_r']}_a{trial_params['lora_alpha']}"
@@ -103,6 +111,9 @@ def main():
             "best_f1": best_f1,
             "trial_params": trial_params,
             "input_mode": input_mode,
+            "dataset_name": dataset_name,
+            "daic_eval_mode": daic_eval_mode,
+            "daic_person_threshold": daic_person_threshold,
         }
 
         if result_file:

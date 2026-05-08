@@ -27,6 +27,12 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from optuna_hpo.train_launcher import launch_ddp_training
+from optuna_hpo.daic_eval import (
+    DAIC_EVAL_MODE_MAJORITY_VOTE,
+    SUPPORTED_DAIC_EVAL_MODES,
+    normalize_daic_eval_mode,
+    validate_daic_person_threshold,
+)
 from optuna_hpo.pruning import (
     DEFAULT_ENABLE_PRUNING,
     DEFAULT_PRUNER_INTERVAL_STEPS,
@@ -200,6 +206,8 @@ def build_objective(
     num_gpus: int,
     model_family: str,
     enable_pruning: bool,
+    daic_eval_mode: str,
+    daic_person_threshold: float,
 ):
     launch_input_mode = resolve_launch_input_mode(model_family)
 
@@ -219,6 +227,8 @@ def build_objective(
         logger.info("  Model Family: %s", model_family)
         logger.info("  Prompt Mode: %s", os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY))
         logger.info("  Launch Input Mode: %s", launch_input_mode)
+        logger.info("  DAIC Eval Mode: %s", daic_eval_mode)
+        logger.info("  DAIC Person Threshold: %.4f", daic_person_threshold)
         logger.info("%s\n", "=" * 70)
 
         trial_params = {
@@ -236,10 +246,13 @@ def build_objective(
             train_data_path=dataset_cfg.train_data_path,
             eval_data_path=dataset_cfg.eval_data_path,
             save_path=save_root,
+            dataset_name=dataset_cfg.dataset_name,
             input_mode=launch_input_mode,
             num_gpus=num_gpus,
             enable_pruning=enable_pruning,
             prune_mode="eval" if enable_pruning else "disabled",
+            daic_eval_mode=daic_eval_mode,
+            daic_person_threshold=daic_person_threshold,
         )
 
         logger.info("\nTrial %s completed with Best F1: %.4f\n", trial.number, best_f1)
@@ -261,8 +274,12 @@ def run_optimization(
     pruner_startup_trials=DEFAULT_PRUNER_STARTUP_TRIALS,
     pruner_warmup_steps=DEFAULT_PRUNER_WARMUP_STEPS,
     pruner_interval_steps=DEFAULT_PRUNER_INTERVAL_STEPS,
+    daic_eval_mode=DAIC_EVAL_MODE_MAJORITY_VOTE,
+    daic_person_threshold=0.5,
 ):
     validate_mode_combination(model_family, prompt_mode)
+    daic_eval_mode = normalize_daic_eval_mode(daic_eval_mode)
+    daic_person_threshold = validate_daic_person_threshold(daic_person_threshold)
     dataset_cfg = get_dataset_config(dataset_name, prompt_mode, task_variant)
     apply_dataset_env(dataset_cfg)
 
@@ -279,6 +296,8 @@ def run_optimization(
     os.environ["STORAGE_PATH"] = storage_path
     os.environ["SAVE_PATH"] = save_root
     os.environ["DATASET_NAME"] = dataset_name
+    os.environ["DAIC_EVAL_MODE"] = daic_eval_mode
+    os.environ["DAIC_PERSON_THRESHOLD"] = str(daic_person_threshold)
 
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
@@ -296,6 +315,8 @@ def run_optimization(
     logger.info("  Pruner Startup Trials: %s", pruner_startup_trials)
     logger.info("  Pruner Warmup Steps: %s", pruner_warmup_steps)
     logger.info("  Pruner Interval Steps: %s", pruner_interval_steps)
+    logger.info("  DAIC Eval Mode: %s", daic_eval_mode)
+    logger.info("  DAIC Person Threshold: %.4f", daic_person_threshold)
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  Storage: %s", storage)
     logger.info("  Save Root: %s", save_root)
@@ -321,6 +342,8 @@ def run_optimization(
         num_gpus=num_gpus,
         model_family=model_family,
         enable_pruning=enable_pruning,
+        daic_eval_mode=daic_eval_mode,
+        daic_person_threshold=daic_person_threshold,
     )
 
     try:
@@ -371,6 +394,8 @@ def run_optimization(
         "pruner_startup_trials": pruner_startup_trials,
         "pruner_warmup_steps": pruner_warmup_steps,
         "pruner_interval_steps": pruner_interval_steps,
+        "daic_eval_mode": daic_eval_mode,
+        "daic_person_threshold": daic_person_threshold,
         "n_trials": len(study.trials),
         "n_completed": len(completed_trials_df),
         "best_trial_number": best_trial.number if best_trial is not None else None,
@@ -468,6 +493,17 @@ if __name__ == "__main__":
         type=int,
         default=int(os.environ.get("PRUNER_INTERVAL_STEPS", DEFAULT_PRUNER_INTERVAL_STEPS)),
     )
+    parser.add_argument(
+        "--daic-eval-mode",
+        type=str,
+        choices=sorted(SUPPORTED_DAIC_EVAL_MODES),
+        default=os.environ.get("DAIC_EVAL_MODE", DAIC_EVAL_MODE_MAJORITY_VOTE),
+    )
+    parser.add_argument(
+        "--daic-person-threshold",
+        type=float,
+        default=float(os.environ.get("DAIC_PERSON_THRESHOLD", "0.5")),
+    )
 
     args = parser.parse_args()
 
@@ -490,4 +526,6 @@ if __name__ == "__main__":
         pruner_startup_trials=args.pruner_startup_trials,
         pruner_warmup_steps=args.pruner_warmup_steps,
         pruner_interval_steps=args.pruner_interval_steps,
+        daic_eval_mode=args.daic_eval_mode,
+        daic_person_threshold=args.daic_person_threshold,
     )

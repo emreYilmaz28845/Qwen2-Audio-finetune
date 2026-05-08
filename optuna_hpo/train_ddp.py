@@ -29,6 +29,13 @@ from transformers import (
 )
 
 from src.dataset import AudioDataset, collate_fn_qwen2audio
+from optuna_hpo.daic_eval import (
+    DAIC_EVAL_MODE_MAJORITY_VOTE,
+    compute_segment_depressed_probability,
+    extract_participant_id,
+    get_daic_label_token_ids,
+    aggregate_participant_predictions,
+)
 from utils.functions import (
     compute_acc_text,
     compute_metrics_from_stats,
@@ -77,6 +84,24 @@ class TextOnlyDataset(torch.utils.data.Dataset):
         return {"prompt": prompt, "target": target}
 
 
+class TextOnlyEvalDatasetWithMeta(TextOnlyDataset):
+    def __getitem__(self, idx):
+        item = super().__getitem__(idx)
+        key = self.tasks[idx]["key"]
+        item["key"] = key
+        item["participant_id"] = extract_participant_id(key)
+        return item
+
+
+class AudioEvalDatasetWithMeta(AudioDataset):
+    def __getitem__(self, idx):
+        item = super().__getitem__(idx)
+        key = self.tasks[idx]["key"]
+        item["key"] = key
+        item["participant_id"] = extract_participant_id(key)
+        return item
+
+
 def collate_fn_textonly(samples, tokenizer):
     """Collate function for text-only training. Tokenizes prompt+target and masks prompt in labels."""
     prompts = [s["prompt"] for s in samples]
@@ -105,6 +130,26 @@ def collate_fn_textonly(samples, tokenizer):
     labels[labels == tokenizer.pad_token_id] = -100
 
     processed_data["labels"] = labels
+    return processed_data
+
+
+def collate_fn_textonly_with_meta(samples, tokenizer):
+    keys = [sample["key"] for sample in samples]
+    participant_ids = [sample["participant_id"] for sample in samples]
+    target_texts = [sample["target"] for sample in samples]
+    processed_data = collate_fn_textonly(samples, tokenizer)
+    processed_data["keys"] = keys
+    processed_data["participant_ids"] = participant_ids
+    processed_data["target_texts"] = target_texts
+    return processed_data
+
+
+def collate_fn_qwen2audio_with_meta(samples, processor):
+    participant_ids = [sample["participant_id"] for sample in samples]
+    target_texts = [sample["target"] for sample in samples]
+    processed_data = collate_fn_qwen2audio(samples, processor)
+    processed_data["participant_ids"] = participant_ids
+    processed_data["target_texts"] = target_texts
     return processed_data
 
 
@@ -275,18 +320,59 @@ def _log_trial_header(logger, trial_name, cfg, world_size, input_mode):
     logger.info("LoRA R: %s", cfg.peft.r)
     logger.info("LoRA Alpha: %s", cfg.peft.lora_alpha)
     logger.info("World Size: %s", world_size)
+    if getattr(cfg.data, "dataset_name", "") == "daic_woz":
+        logger.info("DAIC Eval Mode: %s", cfg.eval.daic_eval_mode)
+        logger.info("DAIC Person Threshold: %.4f", cfg.eval.daic_person_threshold)
     logger.info("%s", "=" * 60)
 
 
-def _evaluate(model, eval_dataloader, device, metric_processor, rank):
+def _is_daic_person_eval(cfg):
+    return getattr(cfg.data, "dataset_name", "") == "daic_woz"
+
+
+def _build_daic_eval_records(metric_processor, logits, labels, keys, participant_ids, target_texts):
+    tokenizer = metric_processor.tokenizer
+    depressed_token_ids, non_depressed_token_ids = get_daic_label_token_ids(tokenizer)
+    records = []
+
+    batch_size = labels.size(0)
+    for sample_index in range(batch_size):
+        valid_label_positions = (labels[sample_index] != -100).nonzero(as_tuple=False).squeeze(-1)
+        if valid_label_positions.numel() == 0:
+            continue
+        start_pred_index = int(valid_label_positions[0].item()) - 1
+        depressed_probability = compute_segment_depressed_probability(
+            logits[sample_index],
+            start_pred_index,
+            depressed_token_ids,
+            non_depressed_token_ids,
+        )
+        records.append(
+            {
+                "key": keys[sample_index],
+                "participant_id": participant_ids[sample_index],
+                "target_text": target_texts[sample_index],
+                "depressed_probability": float(depressed_probability),
+            }
+        )
+
+    return records
+
+
+def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
     eval_loss = 0.0
     eval_steps = 0
     global_stats = None
+    daic_local_records = []
     eval_bar = tqdm(eval_dataloader, desc="[Eval]") if rank == 0 else eval_dataloader
+    run_daic_person_eval = _is_daic_person_eval(cfg)
 
     model.eval()
     with torch.no_grad():
         for _, batch in enumerate(eval_bar):
+            keys = batch.pop("keys", None) if run_daic_person_eval else None
+            participant_ids = batch.pop("participant_ids", None) if run_daic_person_eval else None
+            target_texts = batch.pop("target_texts", None) if run_daic_person_eval else None
             if hasattr(batch, "to"):
                 batch = batch.to(device)
             else:
@@ -295,13 +381,29 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank):
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 outputs = model(**batch)
                 loss = outputs.loss
-                global_stats = compute_metrics_text_binary_accumulate(
-                    metric_processor, outputs.logits, batch["labels"], global_stats
-                )
+                if run_daic_person_eval:
+                    daic_local_records.extend(
+                        _build_daic_eval_records(
+                            metric_processor,
+                            outputs.logits,
+                            batch["labels"],
+                            keys,
+                            participant_ids,
+                            target_texts,
+                        )
+                    )
+                else:
+                    global_stats = compute_metrics_text_binary_accumulate(
+                        metric_processor, outputs.logits, batch["labels"], global_stats
+                    )
 
             eval_loss += loss.item()
             eval_steps += 1
-            if rank == 0 and global_stats and global_stats["total"] > 0:
+            if rank == 0 and run_daic_person_eval:
+                eval_bar.set_description(
+                    f"[Eval] loss {loss:.3f} | segments {len(daic_local_records)}"
+                )
+            elif rank == 0 and global_stats and global_stats["total"] > 0:
                 temp_acc, _, _, temp_f1, temp_wf1 = compute_metrics_from_stats(global_stats)
                 eval_bar.set_description(
                     f"[Eval] loss {loss:.3f} | acc {temp_acc:.4f} | posF1 {temp_f1:.4f} | wF1 {temp_wf1:.4f}"
@@ -310,6 +412,19 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank):
     loss_tensor = torch.tensor([eval_loss, float(eval_steps)], device=device, dtype=torch.float32)
     dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
     reduced_eval_loss = (loss_tensor[0] / loss_tensor[1]).item() if loss_tensor[1] > 0 else 0.0
+
+    if run_daic_person_eval:
+        gathered_records = [None for _ in range(dist.get_world_size())]
+        dist.all_gather_object(gathered_records, daic_local_records)
+        merged_records = []
+        for record_group in gathered_records:
+            merged_records.extend(record_group or [])
+        reduced_stats = aggregate_participant_predictions(
+            merged_records,
+            mode=cfg.eval.daic_eval_mode,
+            threshold=cfg.eval.daic_person_threshold,
+        )
+        return reduced_eval_loss, reduced_stats
 
     stats_tensor = torch.tensor(
         [
@@ -398,11 +513,20 @@ def train_textonly_ddp(cfg, trial_name=""):
         cfg.data.train_prompt_path,
         task_filename=cfg.data.train_task_filename,
     )
-    eval_dataset = TextOnlyDataset(
-        cfg.data.eval_data_path,
-        cfg.data.val_prompt_path,
-        task_filename=cfg.data.eval_task_filename,
-    )
+    if _is_daic_person_eval(cfg):
+        eval_dataset = TextOnlyEvalDatasetWithMeta(
+            cfg.data.eval_data_path,
+            cfg.data.val_prompt_path,
+            task_filename=cfg.data.eval_task_filename,
+        )
+        eval_collate = partial(collate_fn_textonly_with_meta, tokenizer=tokenizer)
+    else:
+        eval_dataset = TextOnlyDataset(
+            cfg.data.eval_data_path,
+            cfg.data.val_prompt_path,
+            task_filename=cfg.data.eval_task_filename,
+        )
+        eval_collate = partial(collate_fn_textonly, tokenizer=tokenizer)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
@@ -430,7 +554,7 @@ def train_textonly_ddp(cfg, trial_name=""):
         eval_dataset,
         batch_size=cfg.train.batch_size,
         num_workers=cfg.data.num_workers,
-        collate_fn=partial(collate_fn_textonly, tokenizer=tokenizer),
+        collate_fn=eval_collate,
         sampler=eval_sampler,
         prefetch_factor=cfg.data.prefetch_factor,
     )
@@ -496,7 +620,7 @@ def train_textonly_ddp(cfg, trial_name=""):
 
             if (train_step + 1) % dynamic_eval_step == 0:
                 eval_loss, reduced_stats = _evaluate(
-                    model, eval_dataloader, device, metric_processor, rank
+                    model, eval_dataloader, device, metric_processor, rank, cfg
                 )
                 if rank == 0:
                     eval_step_idx += 1
@@ -504,7 +628,8 @@ def train_textonly_ddp(cfg, trial_name=""):
                         reduced_stats
                     )
                     _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
-                    logger.info("[Epoch %s Step %s] Eval Metrics:", epoch, train_step)
+                    metric_scope = "Person" if _is_daic_person_eval(cfg) else "Segment"
+                    logger.info("[Epoch %s Step %s] %s-Level Eval Metrics:", epoch, train_step, metric_scope)
                     logger.info(
                         "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
                         eval_loss,
@@ -514,6 +639,14 @@ def train_textonly_ddp(cfg, trial_name=""):
                         eval_f1,
                         eval_wf1,
                     )
+                    if _is_daic_person_eval(cfg):
+                        logger.info(
+                            "  Participants: %s, Unique Segments: %s, Mode: %s, Threshold: %.4f",
+                            reduced_stats.get("num_participants", 0),
+                            reduced_stats.get("num_segments", 0),
+                            cfg.eval.daic_eval_mode,
+                            cfg.eval.daic_person_threshold,
+                        )
 
                     if eval_f1 > best_f1:
                         best_f1 = eval_f1
@@ -591,13 +724,24 @@ def train_audiotext_ddp(cfg, trial_name=""):
         scp_filename=cfg.data.train_scp_filename,
         task_filename=cfg.data.train_task_filename,
     )
-    eval_dataset = AudioDataset(
-        cfg.data.eval_data_path,
-        cfg.data.val_prompt_path,
-        cfg.data.wav_type,
-        scp_filename=cfg.data.eval_scp_filename,
-        task_filename=cfg.data.eval_task_filename,
-    )
+    if _is_daic_person_eval(cfg):
+        eval_dataset = AudioEvalDatasetWithMeta(
+            cfg.data.eval_data_path,
+            cfg.data.val_prompt_path,
+            cfg.data.wav_type,
+            scp_filename=cfg.data.eval_scp_filename,
+            task_filename=cfg.data.eval_task_filename,
+        )
+        eval_collate = partial(collate_fn_qwen2audio_with_meta, processor=processor)
+    else:
+        eval_dataset = AudioDataset(
+            cfg.data.eval_data_path,
+            cfg.data.val_prompt_path,
+            cfg.data.wav_type,
+            scp_filename=cfg.data.eval_scp_filename,
+            task_filename=cfg.data.eval_task_filename,
+        )
+        eval_collate = partial(collate_fn_qwen2audio, processor=processor)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
@@ -625,7 +769,7 @@ def train_audiotext_ddp(cfg, trial_name=""):
         eval_dataset,
         batch_size=cfg.train.batch_size,
         num_workers=cfg.data.num_workers,
-        collate_fn=partial(collate_fn_qwen2audio, processor=processor),
+        collate_fn=eval_collate,
         sampler=eval_sampler,
         prefetch_factor=cfg.data.prefetch_factor,
     )
@@ -705,14 +849,15 @@ def train_audiotext_ddp(cfg, trial_name=""):
                 )
 
             if (train_step + 1) % dynamic_eval_step == 0:
-                eval_loss, reduced_stats = _evaluate(model, eval_dataloader, device, processor, rank)
+                eval_loss, reduced_stats = _evaluate(model, eval_dataloader, device, processor, rank, cfg)
                 if rank == 0:
                     eval_step_idx += 1
                     eval_accuracy, eval_precision, eval_recall, eval_f1, eval_wf1 = compute_metrics_from_stats(
                         reduced_stats
                     )
                     _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
-                    logger.info("[Epoch %s Step %s] Eval Metrics:", epoch, train_step)
+                    metric_scope = "Person" if _is_daic_person_eval(cfg) else "Segment"
+                    logger.info("[Epoch %s Step %s] %s-Level Eval Metrics:", epoch, train_step, metric_scope)
                     logger.info(
                         "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
                         eval_loss,
@@ -722,6 +867,14 @@ def train_audiotext_ddp(cfg, trial_name=""):
                         eval_f1,
                         eval_wf1,
                     )
+                    if _is_daic_person_eval(cfg):
+                        logger.info(
+                            "  Participants: %s, Unique Segments: %s, Mode: %s, Threshold: %.4f",
+                            reduced_stats.get("num_participants", 0),
+                            reduced_stats.get("num_segments", 0),
+                            cfg.eval.daic_eval_mode,
+                            cfg.eval.daic_person_threshold,
+                        )
 
                     if eval_f1 > best_f1:
                         best_f1 = eval_f1
