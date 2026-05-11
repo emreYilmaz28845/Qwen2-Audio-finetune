@@ -375,7 +375,21 @@ def main():
     print(f"{'Dataset':<15} {'Samples':>8} {'Acc':>8} {'Prec':>8} {'Recall':>8} {'F1':>8} {'wF1':>8}")
     print("-" * 90)
 
-    results = {}
+    results = {
+        "_meta": {
+            "model_path": args.model_path,
+            "peft_path": peft_path,
+            "adapter_path": resolved_adapter_path,
+            "checkpoint_mode": checkpoint_mode,
+            "data_path": args.data_path,
+            "prompt_path": args.prompt_path,
+            "scp_filename": args.scp_filename,
+            "task_filename": args.task_filename,
+            "batch_size": args.batch_size,
+            "device": args.device,
+            "avg_loss": avg_loss,
+        }
+    }
     for ds_name in sorted(per_dataset_stats.keys()):
         stats = per_dataset_stats[ds_name]
         metrics = format_metrics(stats)
@@ -408,7 +422,9 @@ def main():
         f"{overall_stats['fn']:>6} {overall_stats['tn']:>6}"
     )
 
-    output_json = args.output_json or os.path.join(peft_path, "per_dataset_eval.json")
+    output_json = (args.output_json or "").strip()
+    if not output_json:
+        output_json = os.path.join(peft_path, "per_dataset_eval.json")
     output_dir = os.path.dirname(output_json) if os.path.dirname(output_json) else "."
     os.makedirs(output_dir, exist_ok=True)
     with open(output_json, "w", encoding="utf-8") as output_file:

@@ -241,7 +241,19 @@ def main():
     print(f"{'Dataset':<15} {'Samples':>8} {'Acc':>8} {'Prec':>8} {'Recall':>8} {'F1':>8} {'wF1':>8}")
     print("-" * 90)
 
-    results = {}
+    results = {
+        "_meta": {
+            "model_path": args.model_path,
+            "peft_path": peft_path if use_peft else "",
+            "data_path": args.data_path,
+            "prompt_path": args.prompt_path,
+            "task_filename": args.task_filename,
+            "batch_size": args.batch_size,
+            "device": args.device,
+            "avg_loss": avg_loss,
+            "used_peft": use_peft,
+        }
+    }
     for ds_name in sorted(per_dataset_stats.keys()):
         stats = per_dataset_stats[ds_name]
         metrics = format_metrics(stats)
@@ -269,7 +281,7 @@ def main():
           f"{overall_stats['fn']:>6} {overall_stats['tn']:>6}")
 
     # Save JSON
-    output_json = args.output_json
+    output_json = (args.output_json or "").strip()
     if not output_json:
         output_json = (
             os.path.join(peft_path, "per_dataset_eval_textonly.json")

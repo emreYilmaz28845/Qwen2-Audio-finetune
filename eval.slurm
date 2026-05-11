@@ -1,14 +1,17 @@
 #!/bin/bash
-#SBATCH -J qwen-eval-2
+#SBATCH -J qwen-eval
 #SBATCH -A etur92
 #SBATCH -q acc_ehpc
 #SBATCH -t 04:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:1
-#SBATCH -o ./logs/%x-%j.out
-#SBATCH -e ./logs/%x-%j.err
+#SBATCH -o /dev/null
+#SBATCH -e /dev/null
 #SBATCH --chdir=/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
+
+set -e
+set -o pipefail
 
 module purge
 module load bsc/1.0
@@ -16,27 +19,63 @@ module load miniforge/24.3.0-0
 source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5_rebuilt/bin/activate
 
 cd /gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
-mkdir -p logs
+mkdir -p logs eval_results
 
 export AUDIOLLM_DATASETS_ROOT=/gpfs/projects/etur92/ozu647717/AudioLLM/Datasets
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
-# --- Set the checkpoint to evaluate ---
-# Override via: sbatch --export=PEFT_PATH=/path/to/checkpoint eval.slurm
-export PEFT_PATH="${PEFT_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_daic_woz_person/audiotext_trial_trial_001_lr4e-05_bs1_r8_a16/best_model}"
+# Override via:
+# sbatch --export=PEFT_PATH=/path/to/checkpoint,DATASET_NAME=daic_woz,MODEL_FAMILY=audio,PROMPT_MODE=audiotext eval.slurm
+export PEFT_PATH="${PEFT_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_daic_woz_person_hpo/audiotext_trial_trial_001_lr4e-05_bs1_r8_a16/best_model}"
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}"
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}"
+export DATASET_NAME="${DATASET_NAME:-merged}"
+export DAIC_EVAL_LEVEL="${DAIC_EVAL_LEVEL:-person}"
 export CHECKPOINT_MODE="${CHECKPOINT_MODE:-auto}"
-export ADAPTER_PATH="${ADAPTER_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_daic_woz_person/audiotext_trial_trial_001_lr4e-05_bs1_r8_a16/best_model/audio_adapter_state.pt}"
+export ADAPTER_PATH="${ADAPTER_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_daic_woz_person_hpo/audiotext_trial_trial_001_lr4e-05_bs1_r8_a16/best_model/audio_adapter_state.pt}"
 
-echo "Evaluating checkpoint: $PEFT_PATH"
-echo "MODEL_FAMILY=$MODEL_FAMILY"
-echo "PROMPT_MODE=$PROMPT_MODE"
-echo "CHECKPOINT_MODE=$CHECKPOINT_MODE"
-if [[ -n "$ADAPTER_PATH" ]]; then
-    echo "ADAPTER_PATH=$ADAPTER_PATH"
-else
-    echo "ADAPTER_PATH=(auto)"
+DAIC_LEVEL_SUFFIX=""
+if [ "$DATASET_NAME" = "daic_woz" ]; then
+    DAIC_LEVEL_SUFFIX="_${DAIC_EVAL_LEVEL}"
 fi
 
-bash eval.sh "$PEFT_PATH"
+export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/eval_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}}"
+export RESULTS_DIR="${RESULTS_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/eval_results/eval_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}}"
+
+mkdir -p "$LOG_DIR" "$RESULTS_DIR"
+
+SLURM_STDOUT_FILE="$LOG_DIR/qwen-eval-${DATASET_NAME}-${SLURM_JOB_ID}.out"
+SLURM_STDERR_FILE="$LOG_DIR/qwen-eval-${DATASET_NAME}-${SLURM_JOB_ID}.err"
+
+exec > >(tee -a "$SLURM_STDOUT_FILE")
+exec 2> >(tee -a "$SLURM_STDERR_FILE" >&2)
+
+TIMESTAMP="$(date +%Y-%m-%d_%H:%M:%S)"
+LOG_FILE="$LOG_DIR/eval_${DATASET_NAME}_${TIMESTAMP}.log"
+
+echo "========================================" | tee -a "$LOG_FILE"
+echo "Per-Dataset Evaluation" | tee -a "$LOG_FILE"
+echo "========================================" | tee -a "$LOG_FILE"
+echo "Timestamp: $TIMESTAMP" | tee -a "$LOG_FILE"
+echo "Job ID: $SLURM_JOB_ID" | tee -a "$LOG_FILE"
+echo "Dataset Name: $DATASET_NAME" | tee -a "$LOG_FILE"
+echo "Model Family: $MODEL_FAMILY" | tee -a "$LOG_FILE"
+echo "Prompt Mode: $PROMPT_MODE" | tee -a "$LOG_FILE"
+echo "DAIC Eval Level: $DAIC_EVAL_LEVEL" | tee -a "$LOG_FILE"
+echo "Checkpoint Mode: $CHECKPOINT_MODE" | tee -a "$LOG_FILE"
+echo "PEFT Path: $PEFT_PATH" | tee -a "$LOG_FILE"
+echo "Adapter Path: ${ADAPTER_PATH:-auto}" | tee -a "$LOG_FILE"
+echo "Log Dir: $LOG_DIR" | tee -a "$LOG_FILE"
+echo "Results Dir: $RESULTS_DIR" | tee -a "$LOG_FILE"
+echo "========================================" | tee -a "$LOG_FILE"
+echo "" | tee -a "$LOG_FILE"
+
+bash eval.sh "$PEFT_PATH" 2>&1 | tee -a "$LOG_FILE"
+
+echo "" | tee -a "$LOG_FILE"
+echo "========================================" | tee -a "$LOG_FILE"
+echo "Evaluation Complete!" | tee -a "$LOG_FILE"
+echo "Stdout: $SLURM_STDOUT_FILE" | tee -a "$LOG_FILE"
+echo "Stderr: $SLURM_STDERR_FILE" | tee -a "$LOG_FILE"
+echo "Log File: $LOG_FILE" | tee -a "$LOG_FILE"
+echo "========================================" | tee -a "$LOG_FILE"

@@ -2,7 +2,7 @@
 # ============================================================
 # Per-Dataset Evaluation Script (MN5 cluster)
 # ============================================================
-# Evaluates the best saved model on the merged validation set,
+# Evaluates a saved model on the merged validation set,
 # reporting separate metrics for DAIC-WOZ, EATD, and CMDC.
 #
 # Usage:
@@ -13,16 +13,26 @@
 #   PROMPT_MODE=full|audiotext|textonly
 #   CHECKPOINT_MODE=auto|full_audio
 #   ADAPTER_PATH=/path/to/audio_adapter_state.pt
+#   DATASET_NAME=merged|daic_woz|eatd
+#   DAIC_EVAL_LEVEL=person|segment
+#   LOG_DIR=/custom/log/dir
+#   RESULTS_DIR=/custom/results/dir
+#   OUTPUT_JSON=/custom/results.json
+#   EVAL_NAME=custom_eval_name
 # ============================================================
+
+set -e
+set -o pipefail
 
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$LOCAL_DIR" || exit 1
 
-# --- Configurable paths (match train.sh conventions) ---
-PEFT_PATH="${1:-$LOCAL_DIR/output_model/1e-05_20260330_023140/07-15}"
+PEFT_PATH="${1:-${PEFT_PATH:-$LOCAL_DIR/output_model/1e-05_20260330_023140/07-15}}"
 MODEL_FAMILY="${MODEL_FAMILY:-audio}"
 CHECKPOINT_MODE="${CHECKPOINT_MODE:-auto}"
 ADAPTER_PATH="${ADAPTER_PATH:-}"
+DATASET_NAME="${DATASET_NAME:-merged}"
+DAIC_EVAL_LEVEL="${DAIC_EVAL_LEVEL:-person}"
 
 DATA_PATH="${DATA_PATH:-$LOCAL_DIR/data/merged/val}"
 SCP_FILENAME="${SCP_FILENAME:-merged.scp}"
@@ -31,13 +41,55 @@ TASK_FILENAME="${TASK_FILENAME:-merged_multitask.jsonl}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 DEVICE="${DEVICE:-cuda:0}"
 
+normalize_model_family() {
+    local raw="$1"
+    case "$raw" in
+        textonly) echo "text" ;;
+        *) echo "$raw" ;;
+    esac
+}
+
+sanitize_name() {
+    local value="$1"
+    value="${value// /_}"
+    value="${value//\//_}"
+    value="${value//:/_}"
+    value="${value//[^A-Za-z0-9._-]/_}"
+    echo "$value"
+}
+
+derive_checkpoint_name() {
+    local checkpoint_path="$1"
+    local normalized="${checkpoint_path%/}"
+    local base_name
+    base_name="$(basename "$normalized")"
+
+    if [[ "$base_name" == "best_model" ]]; then
+        local parent_name
+        parent_name="$(basename "$(dirname "$normalized")")"
+        if [[ -n "$parent_name" ]]; then
+            echo "$parent_name"
+            return
+        fi
+    fi
+
+    if [[ -n "$base_name" ]]; then
+        echo "$base_name"
+        return
+    fi
+
+    echo "base_model"
+}
+
+MODEL_FAMILY="$(normalize_model_family "$MODEL_FAMILY")"
+
 case "$MODEL_FAMILY" in
     audio)
         export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7B-Instruct}"
         EVAL_SCRIPT="evaluate_per_dataset.py"
         PROMPT_MODE="${PROMPT_MODE:-audiotext}"
         ;;
-    text|textonly)
+    text)
         export MODEL_PATH="${MODEL_PATH:-/gpfs/projects/etur92/ozu647717/models/Qwen2-7B-Instruct}"
         EVAL_SCRIPT="evaluate_textonly.py"
         PROMPT_MODE="${PROMPT_MODE:-textonly}"
@@ -50,11 +102,21 @@ case "$MODEL_FAMILY" in
 esac
 
 case "${MODEL_FAMILY}:${PROMPT_MODE}" in
-    audio:full|audio:audiotext|text:textonly|textonly:textonly)
+    audio:full|audio:audiotext|text:textonly)
         ;;
     *)
         echo "Invalid MODEL_FAMILY / PROMPT_MODE combination: ${MODEL_FAMILY} + ${PROMPT_MODE}"
         echo "Allowed combinations are: audio+full, audio+audiotext, text+textonly"
+        exit 1
+        ;;
+esac
+
+case "$DATASET_NAME" in
+    merged|daic_woz|eatd)
+        ;;
+    *)
+        echo "Unsupported DATASET_NAME: $DATASET_NAME"
+        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, or DATASET_NAME=eatd"
         exit 1
         ;;
 esac
@@ -78,26 +140,59 @@ esac
 
 PROMPT_PATH="${PROMPT_PATH:-$DATA_PATH/$PROMPT_FILE_DEFAULT}"
 
+DAIC_LEVEL_SUFFIX=""
+if [[ "$DATASET_NAME" == "daic_woz" ]]; then
+    DAIC_LEVEL_SUFFIX="_${DAIC_EVAL_LEVEL}"
+fi
+
+CHECKPOINT_NAME="$(sanitize_name "$(derive_checkpoint_name "$PEFT_PATH")")"
+if [[ -z "$CHECKPOINT_NAME" ]]; then
+    CHECKPOINT_NAME="checkpoint"
+fi
+
+DEFAULT_EVAL_BASENAME="${DATASET_NAME}${DAIC_LEVEL_SUFFIX}_${MODEL_FAMILY}_${PROMPT_MODE}_${CHECKPOINT_NAME}"
+EVAL_BASENAME_RAW="${EVAL_NAME:-$DEFAULT_EVAL_BASENAME}"
+EVAL_BASENAME="$(sanitize_name "$EVAL_BASENAME_RAW")"
+if [[ -z "$EVAL_BASENAME" ]]; then
+    EVAL_BASENAME="eval_run"
+fi
+
+EVAL_TIMESTAMP="${EVAL_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+LOG_TIMESTAMP="${LOG_TIMESTAMP:-$(date +%Y-%m-%d_%H:%M:%S)}"
+EVAL_NAME_RESOLVED="${EVAL_BASENAME}_${EVAL_TIMESTAMP}"
+
+LOG_DIR="${LOG_DIR:-$LOCAL_DIR/logs/eval_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}}"
+RESULTS_DIR="${RESULTS_DIR:-$LOCAL_DIR/eval_results/eval_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}}"
+OUTPUT_JSON="${OUTPUT_JSON:-$RESULTS_DIR/${EVAL_NAME_RESOLVED}_results.json}"
+
+mkdir -p "$LOG_DIR" "$RESULTS_DIR"
+
 echo "============================================"
 echo "  Per-Dataset Evaluation"
 echo "============================================"
-echo "  MODEL_FAMILY : $MODEL_FAMILY"
-echo "  PROMPT_MODE  : $PROMPT_MODE"
-echo "  CHECKPOINT_MODE: $CHECKPOINT_MODE"
-echo "  EVAL_SCRIPT  : $EVAL_SCRIPT"
-echo "  MODEL_PATH : $MODEL_PATH"
-echo "  PEFT_PATH  : $PEFT_PATH"
+echo "  DATASET_NAME    : $DATASET_NAME"
+echo "  MODEL_FAMILY    : $MODEL_FAMILY"
+echo "  PROMPT_MODE     : $PROMPT_MODE"
+echo "  DAIC_EVAL_LEVEL : $DAIC_EVAL_LEVEL"
+echo "  CHECKPOINT_MODE : $CHECKPOINT_MODE"
+echo "  EVAL_SCRIPT     : $EVAL_SCRIPT"
+echo "  MODEL_PATH      : $MODEL_PATH"
+echo "  PEFT_PATH       : $PEFT_PATH"
+echo "  CHECKPOINT_NAME : $CHECKPOINT_NAME"
+echo "  EVAL_NAME       : $EVAL_NAME_RESOLVED"
+echo "  LOG_DIR         : $LOG_DIR"
+echo "  RESULTS_DIR     : $RESULTS_DIR"
+echo "  OUTPUT_JSON     : $OUTPUT_JSON"
 if [[ -n "$ADAPTER_PATH" ]]; then
-    echo "  ADAPTER_PATH: $ADAPTER_PATH"
+    echo "  ADAPTER_PATH    : $ADAPTER_PATH"
 else
-    echo "  ADAPTER_PATH: (auto)"
+    echo "  ADAPTER_PATH    : (auto)"
 fi
-echo "  DATA_PATH  : $DATA_PATH"
-echo "  PROMPT_PATH: $PROMPT_PATH"
-echo "  DEVICE     : $DEVICE"
+echo "  DATA_PATH       : $DATA_PATH"
+echo "  PROMPT_PATH     : $PROMPT_PATH"
+echo "  DEVICE          : $DEVICE"
 echo "============================================"
 
-# --- Run evaluation ---
 CMD=(
     python "$EVAL_SCRIPT"
     --model_path "$MODEL_PATH"
@@ -105,6 +200,7 @@ CMD=(
     --prompt_path "$PROMPT_PATH"
     --batch_size "$BATCH_SIZE"
     --device "$DEVICE"
+    --output_json "$OUTPUT_JSON"
 )
 
 if [[ "$MODEL_FAMILY" == "audio" ]]; then
