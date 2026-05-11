@@ -33,10 +33,8 @@ CHECKPOINT_MODE="${CHECKPOINT_MODE:-auto}"
 ADAPTER_PATH="${ADAPTER_PATH:-}"
 DATASET_NAME="${DATASET_NAME:-merged}"
 DAIC_EVAL_LEVEL="${DAIC_EVAL_LEVEL:-person}"
-
-DATA_PATH="${DATA_PATH:-$LOCAL_DIR/data/merged/val}"
-SCP_FILENAME="${SCP_FILENAME:-merged.scp}"
-TASK_FILENAME="${TASK_FILENAME:-merged_multitask.jsonl}"
+DAIC_EVAL_MODE="${DAIC_EVAL_MODE:-majority_vote}"
+DAIC_PERSON_THRESHOLD="${DAIC_PERSON_THRESHOLD:-0.5}"
 
 BATCH_SIZE="${BATCH_SIZE:-1}"
 DEVICE="${DEVICE:-cuda:0}"
@@ -123,13 +121,13 @@ esac
 
 case "$PROMPT_MODE" in
     full|merged|default)
-        PROMPT_FILE_DEFAULT="merged_multiprompt.jsonl"
+        PROMPT_FILE_SUFFIX="multiprompt.jsonl"
         ;;
     audiotext)
-        PROMPT_FILE_DEFAULT="merged_multiprompt_audiotext.jsonl"
+        PROMPT_FILE_SUFFIX="multiprompt_audiotext.jsonl"
         ;;
     textonly)
-        PROMPT_FILE_DEFAULT="merged_multiprompt_textonly.jsonl"
+        PROMPT_FILE_SUFFIX="multiprompt_textonly.jsonl"
         ;;
     *)
         echo "Unsupported PROMPT_MODE: $PROMPT_MODE"
@@ -138,6 +136,25 @@ case "$PROMPT_MODE" in
         ;;
 esac
 
+case "$DATASET_NAME" in
+    merged)
+        DATA_SPLIT_DEFAULT="val"
+        DATA_BASENAME="merged"
+        ;;
+    daic_woz)
+        DATA_SPLIT_DEFAULT="val"
+        DATA_BASENAME="daic_woz"
+        ;;
+    eatd)
+        DATA_SPLIT_DEFAULT="test"
+        DATA_BASENAME="eatd"
+        ;;
+esac
+
+DATA_PATH="${DATA_PATH:-$LOCAL_DIR/data/$DATASET_NAME/$DATA_SPLIT_DEFAULT}"
+SCP_FILENAME="${SCP_FILENAME:-$DATA_BASENAME.scp}"
+TASK_FILENAME="${TASK_FILENAME:-${DATA_BASENAME}_multitask.jsonl}"
+PROMPT_FILE_DEFAULT="${DATA_BASENAME}_${PROMPT_FILE_SUFFIX}"
 PROMPT_PATH="${PROMPT_PATH:-$DATA_PATH/$PROMPT_FILE_DEFAULT}"
 
 DAIC_LEVEL_SUFFIX=""
@@ -174,6 +191,8 @@ echo "  DATASET_NAME    : $DATASET_NAME"
 echo "  MODEL_FAMILY    : $MODEL_FAMILY"
 echo "  PROMPT_MODE     : $PROMPT_MODE"
 echo "  DAIC_EVAL_LEVEL : $DAIC_EVAL_LEVEL"
+echo "  DAIC_EVAL_MODE  : $DAIC_EVAL_MODE"
+echo "  DAIC_THRESHOLD  : $DAIC_PERSON_THRESHOLD"
 echo "  CHECKPOINT_MODE : $CHECKPOINT_MODE"
 echo "  EVAL_SCRIPT     : $EVAL_SCRIPT"
 echo "  MODEL_PATH      : $MODEL_PATH"
@@ -196,6 +215,10 @@ echo "============================================"
 CMD=(
     python "$EVAL_SCRIPT"
     --model_path "$MODEL_PATH"
+    --dataset_name "$DATASET_NAME"
+    --daic_eval_level "$DAIC_EVAL_LEVEL"
+    --daic_eval_mode "$DAIC_EVAL_MODE"
+    --daic_person_threshold "$DAIC_PERSON_THRESHOLD"
     --data_path "$DATA_PATH"
     --prompt_path "$PROMPT_PATH"
     --batch_size "$BATCH_SIZE"

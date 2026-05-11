@@ -21,6 +21,19 @@ from tqdm import tqdm
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 
 from src.dataset import AudioDataset, collate_fn_qwen2audio
+from utils.daic_eval import (
+    DAIC_DATASET_NAME,
+    DAIC_PERSON_RESULTS_KEY,
+    SUPPORTED_DAIC_EVAL_LEVELS,
+    SUPPORTED_DAIC_EVAL_MODES,
+    apply_daic_person_level_results,
+    build_daic_eval_records,
+    build_daic_task_metadata,
+    make_binary_stats,
+    normalize_daic_eval_level,
+    normalize_daic_eval_mode,
+    validate_daic_person_threshold,
+)
 from utils.functions import (
     compute_metrics_from_stats,
     compute_metrics_text_binary_accumulate,
@@ -103,34 +116,37 @@ def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
 
 
 class AudioDatasetWithMeta(AudioDataset):
+    def __init__(self, *args, default_dataset_name="unknown", **kwargs):
+        self.default_dataset_name = default_dataset_name
+        super().__init__(*args, **kwargs)
+
     def __getitem__(self, idx):
         item = super().__getitem__(idx)
-        item["dataset_name"] = self.tasks[idx].get("dataset", "unknown")
+        item.update(build_daic_task_metadata(self.tasks[idx], default_dataset_name=self.default_dataset_name))
         return item
 
 
 def collate_fn_with_meta(samples, processor):
     dataset_names = [s.pop("dataset_name") for s in samples]
+    target_texts = [s.pop("target_text") for s in samples]
+    daic_keys = [s.pop("daic_key") for s in samples]
+    participant_ids = [s.pop("participant_id") for s in samples]
     processed_data = collate_fn_qwen2audio(samples, processor)
     processed_data["dataset_names"] = dataset_names
+    processed_data["target_texts"] = target_texts
+    processed_data["daic_keys"] = daic_keys
+    processed_data["participant_ids"] = participant_ids
     return processed_data
 
 
-def accumulate_stats_per_dataset(processor, logits, labels, dataset_names, per_dataset_stats, overall_stats):
+def accumulate_segment_stats_per_dataset(processor, logits, labels, dataset_names, per_dataset_stats, overall_stats):
     compute_metrics_text_binary_accumulate(processor, logits, labels, overall_stats)
 
     batch_size = labels.size(0)
     for idx in range(batch_size):
         ds_name = dataset_names[idx]
         if ds_name not in per_dataset_stats:
-            per_dataset_stats[ds_name] = {
-                "tp": 0,
-                "fp": 0,
-                "fn": 0,
-                "tn": 0,
-                "total": 0,
-                "correct": 0,
-            }
+            per_dataset_stats[ds_name] = make_binary_stats()
         compute_metrics_text_binary_accumulate(
             processor,
             logits[idx: idx + 1],
@@ -151,6 +167,23 @@ def format_metrics(stats):
         "f1": f1,
         "weighted_f1": weighted_f1,
     }
+
+
+def format_result_entry(stats):
+    return {**format_metrics(stats), **stats}
+
+
+def print_metrics_row(name, stats):
+    metrics = format_metrics(stats)
+    print(
+        f"{name:<15} {stats['total']:>8} {metrics['accuracy']:>8.4f} "
+        f"{metrics['precision']:>8.4f} {metrics['recall']:>8.4f} "
+        f"{metrics['f1']:>8.4f} {metrics['weighted_f1']:>8.4f}"
+    )
+
+
+def print_confusion_row(name, stats):
+    print(f"{name:<15} {stats['tp']:>6} {stats['fp']:>6} {stats['fn']:>6} {stats['tn']:>6}")
 
 
 def load_peft_tensor_names(peft_path):
@@ -269,6 +302,12 @@ def main():
     parser.add_argument("--prompt_path", type=str, default="data/merged/val/merged_multiprompt_audiotext.jsonl")
     parser.add_argument("--scp_filename", type=str, default="merged.scp")
     parser.add_argument("--task_filename", type=str, default="merged_multitask.jsonl")
+    parser.add_argument("--dataset_name", type=str, default="merged")
+    parser.add_argument("--daic_eval_level", type=str, default="person",
+                        choices=sorted(SUPPORTED_DAIC_EVAL_LEVELS))
+    parser.add_argument("--daic_eval_mode", type=str, default="majority_vote",
+                        choices=sorted(SUPPORTED_DAIC_EVAL_MODES))
+    parser.add_argument("--daic_person_threshold", type=float, default=0.5)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--output_json", type=str, default="")
@@ -279,7 +318,14 @@ def main():
     device = args.device
     peft_path = (args.peft_path or "").strip()
     adapter_path = (args.adapter_path or "").strip()
+    dataset_name = (args.dataset_name or "").strip().lower()
+    daic_eval_level = normalize_daic_eval_level(args.daic_eval_level)
+    daic_eval_mode = normalize_daic_eval_mode(args.daic_eval_mode)
+    daic_person_threshold = validate_daic_person_threshold(args.daic_person_threshold)
     use_peft = peft_path.lower() not in {"", "none", "null", "base", "baseline"}
+
+    if dataset_name not in {"merged", DAIC_DATASET_NAME, "eatd"}:
+        raise ValueError(f"Unsupported dataset_name={args.dataset_name!r}.")
 
     if not use_peft:
         raise RuntimeError(
@@ -295,8 +341,12 @@ def main():
     print(f"[Config] peft_path:        {peft_path}")
     print(f"[Config] adapter_path:     {resolved_adapter_path}")
     print(f"[Config] checkpoint_mode:  {checkpoint_mode} (detected from PEFT weights)")
+    print(f"[Config] dataset_name:      {dataset_name}")
     print(f"[Config] data_path:        {args.data_path}")
     print(f"[Config] prompt_path:      {args.prompt_path}")
+    print(f"[Config] daic_eval_level:  {daic_eval_level}")
+    print(f"[Config] daic_eval_mode:   {daic_eval_mode}")
+    print(f"[Config] daic_threshold:   {daic_person_threshold}")
     print(f"[Config] device:           {device}")
     print(f"[Config] audio_tensor_key_count: {sum('audio_tower' in name for name in tensor_names)}")
 
@@ -330,6 +380,7 @@ def main():
         wav_type="wav",
         scp_filename=args.scp_filename,
         task_filename=args.task_filename,
+        default_dataset_name=dataset_name,
     )
     eval_dataloader = torch.utils.data.DataLoader(
         eval_dataset,
@@ -342,13 +393,18 @@ def main():
 
     print("\n[Eval] Running full-audio evaluation...\n")
     per_dataset_stats = {}
-    overall_stats = {"tp": 0, "fp": 0, "fn": 0, "tn": 0, "total": 0, "correct": 0}
+    overall_stats = make_binary_stats()
+    daic_records = []
     eval_loss_sum = 0.0
     eval_steps = 0
+    use_person_as_primary = dataset_name == DAIC_DATASET_NAME and daic_eval_level == "person"
 
     with torch.no_grad():
         for batch in tqdm(eval_dataloader, desc="[Eval]"):
             dataset_names = batch.pop("dataset_names")
+            target_texts = batch.pop("target_texts")
+            daic_keys = batch.pop("daic_keys")
+            participant_ids = batch.pop("participant_ids")
             batch = batch.to(device)
 
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
@@ -358,16 +414,39 @@ def main():
             eval_loss_sum += loss.item()
             eval_steps += 1
 
-            accumulate_stats_per_dataset(
-                processor,
-                outputs.logits,
-                batch["labels"],
-                dataset_names,
-                per_dataset_stats,
-                overall_stats,
-            )
+            if not use_person_as_primary:
+                accumulate_segment_stats_per_dataset(
+                    processor,
+                    outputs.logits,
+                    batch["labels"],
+                    dataset_names,
+                    per_dataset_stats,
+                    overall_stats,
+                )
+
+            if daic_eval_level == "person":
+                daic_records.extend(
+                    build_daic_eval_records(
+                        processor.tokenizer,
+                        outputs.logits,
+                        batch["labels"],
+                        daic_keys,
+                        participant_ids,
+                        target_texts,
+                        dataset_names=dataset_names,
+                    )
+                )
 
     avg_loss = eval_loss_sum / eval_steps if eval_steps > 0 else 0.0
+    per_dataset_stats, overall_stats, supplemental_results = apply_daic_person_level_results(
+        dataset_name=dataset_name,
+        daic_eval_level=daic_eval_level,
+        per_dataset_stats=per_dataset_stats,
+        overall_stats=overall_stats,
+        daic_records=daic_records,
+        mode=daic_eval_mode,
+        threshold=daic_person_threshold,
+    )
 
     print("\n" + "=" * 90)
     print(f"  PER-DATASET EVALUATION RESULTS    (avg loss: {avg_loss:.4f})")
@@ -385,6 +464,10 @@ def main():
             "prompt_path": args.prompt_path,
             "scp_filename": args.scp_filename,
             "task_filename": args.task_filename,
+            "dataset_name": dataset_name,
+            "daic_eval_level": daic_eval_level,
+            "daic_eval_mode": daic_eval_mode,
+            "daic_person_threshold": daic_person_threshold,
             "batch_size": args.batch_size,
             "device": args.device,
             "avg_loss": avg_loss,
@@ -392,35 +475,41 @@ def main():
     }
     for ds_name in sorted(per_dataset_stats.keys()):
         stats = per_dataset_stats[ds_name]
-        metrics = format_metrics(stats)
-        results[ds_name] = {**metrics, **stats}
-        print(
-            f"{ds_name:<15} {stats['total']:>8} {metrics['accuracy']:>8.4f} "
-            f"{metrics['precision']:>8.4f} {metrics['recall']:>8.4f} "
-            f"{metrics['f1']:>8.4f} {metrics['weighted_f1']:>8.4f}"
-        )
+        results[ds_name] = format_result_entry(stats)
+        print_metrics_row(ds_name, stats)
 
-    overall_metrics = format_metrics(overall_stats)
-    results["overall"] = {**overall_metrics, **overall_stats}
+    for ds_name in sorted(supplemental_results.keys()):
+        stats = supplemental_results[ds_name]
+        results[ds_name] = format_result_entry(stats)
+        print_metrics_row(ds_name, stats)
+
+    results["overall"] = format_result_entry(overall_stats)
     print("-" * 90)
-    print(
-        f"{'OVERALL':<15} {overall_stats['total']:>8} {overall_metrics['accuracy']:>8.4f} "
-        f"{overall_metrics['precision']:>8.4f} {overall_metrics['recall']:>8.4f} "
-        f"{overall_metrics['f1']:>8.4f} {overall_metrics['weighted_f1']:>8.4f}"
-    )
+    print_metrics_row("OVERALL", overall_stats)
     print("=" * 90)
+
+    if dataset_name == DAIC_DATASET_NAME and daic_eval_level == "person" and DAIC_DATASET_NAME in results:
+        print(
+            f"[Info] DAIC person-level counts: "
+            f"participants={results[DAIC_DATASET_NAME].get('num_participants', 0)} "
+            f"segments={results[DAIC_DATASET_NAME].get('num_segments', 0)}"
+        )
+    if dataset_name == "merged" and daic_eval_level == "person" and DAIC_PERSON_RESULTS_KEY in results:
+        print(
+            f"[Info] Supplemental merged DAIC person-level counts: "
+            f"participants={results[DAIC_PERSON_RESULTS_KEY].get('num_participants', 0)} "
+            f"segments={results[DAIC_PERSON_RESULTS_KEY].get('num_segments', 0)}"
+        )
 
     print("\nConfusion Matrix Details:")
     print(f"{'Dataset':<15} {'TP':>6} {'FP':>6} {'FN':>6} {'TN':>6}")
     print("-" * 50)
     for ds_name in sorted(per_dataset_stats.keys()):
-        stats = per_dataset_stats[ds_name]
-        print(f"{ds_name:<15} {stats['tp']:>6} {stats['fp']:>6} {stats['fn']:>6} {stats['tn']:>6}")
+        print_confusion_row(ds_name, per_dataset_stats[ds_name])
+    for ds_name in sorted(supplemental_results.keys()):
+        print_confusion_row(ds_name, supplemental_results[ds_name])
     print("-" * 50)
-    print(
-        f"{'OVERALL':<15} {overall_stats['tp']:>6} {overall_stats['fp']:>6} "
-        f"{overall_stats['fn']:>6} {overall_stats['tn']:>6}"
-    )
+    print_confusion_row("OVERALL", overall_stats)
 
     output_json = (args.output_json or "").strip()
     if not output_json:

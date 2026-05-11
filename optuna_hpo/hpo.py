@@ -27,7 +27,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from optuna_hpo.train_launcher import launch_ddp_training
-from optuna_hpo.daic_eval import (
+from utils.daic_eval import (
     DAIC_EVAL_LEVEL_PERSON,
     DAIC_EVAL_MODE_MAJORITY_VOTE,
     SUPPORTED_DAIC_EVAL_LEVELS,

@@ -1,6 +1,6 @@
 import torch
 
-from optuna_hpo.daic_eval import (
+from utils.daic_eval import (
     DAIC_EVAL_LEVEL_PERSON,
     DAIC_EVAL_LEVEL_SEGMENT,
     DAIC_EVAL_MODE_MAJORITY_VOTE,

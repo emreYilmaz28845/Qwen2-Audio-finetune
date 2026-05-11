@@ -29,12 +29,11 @@ from transformers import (
 )
 
 from src.dataset import AudioDataset, collate_fn_qwen2audio
-from optuna_hpo.daic_eval import (
+from utils.daic_eval import (
     DAIC_EVAL_LEVEL_PERSON,
-    compute_segment_depressed_probability,
-    extract_participant_id,
-    get_daic_label_token_ids,
     aggregate_participant_predictions,
+    build_daic_eval_records,
+    extract_participant_id,
 )
 from utils.functions import (
     compute_acc_text,
@@ -340,35 +339,6 @@ def _is_daic_person_eval(cfg):
     )
 
 
-def _build_daic_eval_records(metric_processor, logits, labels, keys, participant_ids, target_texts):
-    tokenizer = metric_processor.tokenizer
-    depressed_token_ids, non_depressed_token_ids = get_daic_label_token_ids(tokenizer)
-    records = []
-
-    batch_size = labels.size(0)
-    for sample_index in range(batch_size):
-        valid_label_positions = (labels[sample_index] != -100).nonzero(as_tuple=False).squeeze(-1)
-        if valid_label_positions.numel() == 0:
-            continue
-        start_pred_index = int(valid_label_positions[0].item()) - 1
-        depressed_probability = compute_segment_depressed_probability(
-            logits[sample_index],
-            start_pred_index,
-            depressed_token_ids,
-            non_depressed_token_ids,
-        )
-        records.append(
-            {
-                "key": keys[sample_index],
-                "participant_id": participant_ids[sample_index],
-                "target_text": target_texts[sample_index],
-                "depressed_probability": float(depressed_probability),
-            }
-        )
-
-    return records
-
-
 def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
     eval_loss = 0.0
     eval_steps = 0
@@ -393,8 +363,8 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
                 loss = outputs.loss
                 if run_daic_person_eval:
                     daic_local_records.extend(
-                        _build_daic_eval_records(
-                            metric_processor,
+                        build_daic_eval_records(
+                            metric_processor.tokenizer,
                             outputs.logits,
                             batch["labels"],
                             keys,
