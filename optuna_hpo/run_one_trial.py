@@ -10,26 +10,25 @@ from optuna_hpo.hpo import (
     DATASET_DAIC_WOZ,
     DATASET_EATD,
     DATASET_MERGED,
-    DAIC_EVAL_LEVEL_PERSON,
-    DAIC_EVAL_MODE_MAJORITY_VOTE,
+    DEFAULT_GROUPED_EVAL_LEVEL,
+    DEFAULT_GROUPED_EVAL_MODE,
     MODEL_FAMILY_AUDIO,
     MODEL_FAMILY_TEXT,
     PROMPT_MODE_AUDIOTEXT,
     PROMPT_MODE_FULL,
     PROMPT_MODE_TEXTONLY,
-    SUPPORTED_DAIC_EVAL_LEVELS,
-    SUPPORTED_DAIC_EVAL_MODES,
+    SUPPORTED_GROUPED_EVAL_LEVELS,
+    SUPPORTED_GROUPED_EVAL_MODES,
     TASK_VARIANT_DEFAULT,
     TASK_VARIANT_FILTERED,
     apply_dataset_env,
+    apply_grouped_eval_env,
     default_save_root,
     get_dataset_config,
-    normalize_daic_eval_level,
-    normalize_daic_eval_mode,
     normalize_model_family,
+    resolve_grouped_eval_settings,
     resolve_launch_input_mode,
     resolve_model_path,
-    validate_daic_person_threshold,
     validate_mode_combination,
 )
 from optuna_hpo.train_launcher import launch_ddp_training
@@ -75,40 +74,56 @@ def main():
     )
     parser.add_argument(
         "--daic-eval-level",
+        dest="daic_woz_eval_level",
         type=str,
-        choices=sorted(SUPPORTED_DAIC_EVAL_LEVELS),
-        default=os.environ.get("DAIC_EVAL_LEVEL", DAIC_EVAL_LEVEL_PERSON),
+        choices=sorted(SUPPORTED_GROUPED_EVAL_LEVELS),
+        default=os.environ.get("DAIC_WOZ_EVAL_LEVEL", os.environ.get("DAIC_EVAL_LEVEL", DEFAULT_GROUPED_EVAL_LEVEL)),
     )
     parser.add_argument(
         "--daic-eval-mode",
+        dest="daic_woz_eval_mode",
         type=str,
-        choices=sorted(SUPPORTED_DAIC_EVAL_MODES),
-        default=os.environ.get("DAIC_EVAL_MODE", DAIC_EVAL_MODE_MAJORITY_VOTE),
+        choices=sorted(SUPPORTED_GROUPED_EVAL_MODES),
+        default=os.environ.get("DAIC_WOZ_EVAL_MODE", os.environ.get("DAIC_EVAL_MODE", DEFAULT_GROUPED_EVAL_MODE)),
     )
     parser.add_argument(
         "--daic-person-threshold",
+        dest="daic_woz_person_threshold",
         type=float,
-        default=float(os.environ.get("DAIC_PERSON_THRESHOLD", "0.5")),
+        default=float(os.environ.get("DAIC_WOZ_PERSON_THRESHOLD", os.environ.get("DAIC_PERSON_THRESHOLD", "0.5"))),
+    )
+    parser.add_argument(
+        "--eatd-eval-level",
+        type=str,
+        choices=sorted(SUPPORTED_GROUPED_EVAL_LEVELS),
+        default=os.environ.get("EATD_EVAL_LEVEL", DEFAULT_GROUPED_EVAL_LEVEL),
+    )
+    parser.add_argument(
+        "--eatd-eval-mode",
+        type=str,
+        choices=sorted(SUPPORTED_GROUPED_EVAL_MODES),
+        default=os.environ.get("EATD_EVAL_MODE", DEFAULT_GROUPED_EVAL_MODE),
+    )
+    parser.add_argument(
+        "--eatd-person-threshold",
+        type=float,
+        default=float(os.environ.get("EATD_PERSON_THRESHOLD", "0.5")),
     )
 
     args = parser.parse_args()
 
     model_family = normalize_model_family(args.model_family)
     validate_mode_combination(model_family, args.prompt_mode)
-    daic_eval_level = normalize_daic_eval_level(args.daic_eval_level)
-    daic_eval_mode = normalize_daic_eval_mode(args.daic_eval_mode)
-    daic_person_threshold = validate_daic_person_threshold(args.daic_person_threshold)
+    grouped_settings = resolve_grouped_eval_settings(args)
 
     dataset_cfg = get_dataset_config(args.dataset_name, args.prompt_mode, args.task_variant)
     apply_dataset_env(dataset_cfg)
+    apply_grouped_eval_env(grouped_settings)
 
     os.environ["DATASET_NAME"] = args.dataset_name
     os.environ["MODEL_FAMILY"] = model_family
     os.environ["PROMPT_MODE"] = args.prompt_mode
     os.environ["TASK_VARIANT"] = args.task_variant
-    os.environ["DAIC_EVAL_LEVEL"] = daic_eval_level
-    os.environ["DAIC_EVAL_MODE"] = daic_eval_mode
-    os.environ["DAIC_PERSON_THRESHOLD"] = str(daic_person_threshold)
 
     launch_input_mode = resolve_launch_input_mode(model_family)
     model_path = resolve_model_path(model_family)
@@ -130,9 +145,9 @@ def main():
         dataset_name=args.dataset_name,
         input_mode=launch_input_mode,
         num_gpus=args.num_gpus,
-        daic_eval_level=daic_eval_level,
-        daic_eval_mode=daic_eval_mode,
-        daic_person_threshold=daic_person_threshold,
+        daic_eval_level=grouped_settings[DATASET_DAIC_WOZ]["level"],
+        daic_eval_mode=grouped_settings[DATASET_DAIC_WOZ]["mode"],
+        daic_person_threshold=grouped_settings[DATASET_DAIC_WOZ]["threshold"],
     )
     print(f"Training completed! Best F1: {result}")
 

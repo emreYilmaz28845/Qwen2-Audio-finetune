@@ -9,9 +9,12 @@ DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
-DAIC_EVAL_LEVEL="${DAIC_EVAL_LEVEL:-person}" # segment or person
-DAIC_EVAL_MODE="${DAIC_EVAL_MODE:-majority_vote}" # majority_vote, mean_probability, or max_probability
-DAIC_PERSON_THRESHOLD="${DAIC_PERSON_THRESHOLD:-0.5}"
+DAIC_WOZ_EVAL_LEVEL="${DAIC_WOZ_EVAL_LEVEL:-${DAIC_EVAL_LEVEL:-person}}"
+DAIC_WOZ_EVAL_MODE="${DAIC_WOZ_EVAL_MODE:-${DAIC_EVAL_MODE:-majority_vote}}"
+DAIC_WOZ_PERSON_THRESHOLD="${DAIC_WOZ_PERSON_THRESHOLD:-${DAIC_PERSON_THRESHOLD:-0.5}}"
+EATD_EVAL_LEVEL="${EATD_EVAL_LEVEL:-person}"
+EATD_EVAL_MODE="${EATD_EVAL_MODE:-majority_vote}"
+EATD_PERSON_THRESHOLD="${EATD_PERSON_THRESHOLD:-0.5}"
 ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
 PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
 PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
@@ -37,17 +40,19 @@ case "$DATASET_NAME" in
         ;;
 esac
 
-DAIC_LEVEL_SUFFIX=""
+DATASET_LEVEL_SUFFIX=""
 if [ "$DATASET_NAME" = "daic_woz" ]; then
-    DAIC_LEVEL_SUFFIX="_${DAIC_EVAL_LEVEL}"
+    DATASET_LEVEL_SUFFIX="_${DAIC_WOZ_EVAL_LEVEL}"
+elif [ "$DATASET_NAME" = "eatd" ]; then
+    DATASET_LEVEL_SUFFIX="_${EATD_EVAL_LEVEL}"
 fi
 
 N_TRIALS=${1:-20}
-STUDY_NAME_DEFAULT="${DATASET_NAME}${DAIC_LEVEL_SUFFIX}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)"
+STUDY_NAME_DEFAULT="${DATASET_NAME}${DATASET_LEVEL_SUFFIX}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)"
 STUDY_NAME=${2:-$STUDY_NAME_DEFAULT}
-STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}}"
-SAVE_PATH="${SAVE_PATH:-output_model/optuna_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}_hpo/${PROMPT_MODE}}"
-LOG_DIR="${LOG_DIR:-logs/optuna_${DATASET_NAME}${DAIC_LEVEL_SUFFIX}}"
+STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_${DATASET_NAME}${DATASET_LEVEL_SUFFIX}}"
+SAVE_PATH="${SAVE_PATH:-output_model/optuna_${DATASET_NAME}_hpo${DATASET_LEVEL_SUFFIX}/${PROMPT_MODE}}"
+LOG_DIR="${LOG_DIR:-logs/optuna_${DATASET_NAME}${DATASET_LEVEL_SUFFIX}}"
 PRUNING_FLAG="--disable-pruning"
 case "${ENABLE_PRUNING,,}" in
     1|true|yes|on)
@@ -62,9 +67,12 @@ echo "Dataset Name: $DATASET_NAME"
 echo "Model Family: $MODEL_FAMILY"
 echo "Prompt Mode: $PROMPT_MODE"
 echo "Task Variant: $TASK_VARIANT"
-echo "DAIC Eval Level: $DAIC_EVAL_LEVEL"
-echo "DAIC Eval Mode: $DAIC_EVAL_MODE"
-echo "DAIC Person Threshold: $DAIC_PERSON_THRESHOLD"
+echo "DAIC Eval Level: $DAIC_WOZ_EVAL_LEVEL"
+echo "DAIC Eval Mode: $DAIC_WOZ_EVAL_MODE"
+echo "DAIC Person Threshold: $DAIC_WOZ_PERSON_THRESHOLD"
+echo "EATD Eval Level: $EATD_EVAL_LEVEL"
+echo "EATD Eval Mode: $EATD_EVAL_MODE"
+echo "EATD Person Threshold: $EATD_PERSON_THRESHOLD"
 echo "Number of Trials: $N_TRIALS"
 echo "Enable Pruning: $ENABLE_PRUNING"
 echo "Pruner Startup Trials: $PRUNER_STARTUP_TRIALS"
@@ -84,9 +92,15 @@ if [ -d "/gpfs/projects/etur92" ]; then
     MODEL_FAMILY="$MODEL_FAMILY" \
     PROMPT_MODE="$PROMPT_MODE" \
     TASK_VARIANT="$TASK_VARIANT" \
-    DAIC_EVAL_LEVEL="$DAIC_EVAL_LEVEL" \
-    DAIC_EVAL_MODE="$DAIC_EVAL_MODE" \
-    DAIC_PERSON_THRESHOLD="$DAIC_PERSON_THRESHOLD" \
+    DAIC_WOZ_EVAL_LEVEL="$DAIC_WOZ_EVAL_LEVEL" \
+    DAIC_WOZ_EVAL_MODE="$DAIC_WOZ_EVAL_MODE" \
+    DAIC_WOZ_PERSON_THRESHOLD="$DAIC_WOZ_PERSON_THRESHOLD" \
+    DAIC_EVAL_LEVEL="$DAIC_WOZ_EVAL_LEVEL" \
+    DAIC_EVAL_MODE="$DAIC_WOZ_EVAL_MODE" \
+    DAIC_PERSON_THRESHOLD="$DAIC_WOZ_PERSON_THRESHOLD" \
+    EATD_EVAL_LEVEL="$EATD_EVAL_LEVEL" \
+    EATD_EVAL_MODE="$EATD_EVAL_MODE" \
+    EATD_PERSON_THRESHOLD="$EATD_PERSON_THRESHOLD" \
     N_TRIALS="$N_TRIALS" \
     ENABLE_PRUNING="$ENABLE_PRUNING" \
     PRUNER_STARTUP_TRIALS="$PRUNER_STARTUP_TRIALS" \
@@ -114,9 +128,12 @@ else
         --model-family "$MODEL_FAMILY" \
         --prompt-mode "$PROMPT_MODE" \
         --task-variant "$TASK_VARIANT" \
-        --daic-eval-level "$DAIC_EVAL_LEVEL" \
-        --daic-eval-mode "$DAIC_EVAL_MODE" \
-        --daic-person-threshold "$DAIC_PERSON_THRESHOLD" \
+        --daic-eval-level "$DAIC_WOZ_EVAL_LEVEL" \
+        --daic-eval-mode "$DAIC_WOZ_EVAL_MODE" \
+        --daic-person-threshold "$DAIC_WOZ_PERSON_THRESHOLD" \
+        --eatd-eval-level "$EATD_EVAL_LEVEL" \
+        --eatd-eval-mode "$EATD_EVAL_MODE" \
+        --eatd-person-threshold "$EATD_PERSON_THRESHOLD" \
         --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
         --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
         --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \

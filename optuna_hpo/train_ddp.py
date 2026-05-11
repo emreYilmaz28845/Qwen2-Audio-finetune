@@ -29,11 +29,13 @@ from transformers import (
 )
 
 from src.dataset import AudioDataset, collate_fn_qwen2audio
-from utils.daic_eval import (
-    DAIC_EVAL_LEVEL_PERSON,
-    aggregate_participant_predictions,
-    build_daic_eval_records,
-    extract_participant_id,
+from utils.grouped_eval import (
+    GROUPED_DATASET_NAMES,
+    aggregate_group_predictions,
+    build_grouped_eval_records,
+    build_grouped_task_metadata,
+    grouped_eval_enabled,
+    normalize_grouped_eval_level,
 )
 from utils.functions import (
     compute_acc_text,
@@ -84,20 +86,24 @@ class TextOnlyDataset(torch.utils.data.Dataset):
 
 
 class TextOnlyEvalDatasetWithMeta(TextOnlyDataset):
+    def __init__(self, *args, default_dataset_name="unknown", **kwargs):
+        self.default_dataset_name = default_dataset_name
+        super().__init__(*args, **kwargs)
+
     def __getitem__(self, idx):
         item = super().__getitem__(idx)
-        key = self.tasks[idx]["key"]
-        item["key"] = key
-        item["participant_id"] = extract_participant_id(key)
+        item.update(build_grouped_task_metadata(self.tasks[idx], default_dataset_name=self.default_dataset_name))
         return item
 
 
 class AudioEvalDatasetWithMeta(AudioDataset):
+    def __init__(self, *args, default_dataset_name="unknown", **kwargs):
+        self.default_dataset_name = default_dataset_name
+        super().__init__(*args, **kwargs)
+
     def __getitem__(self, idx):
         item = super().__getitem__(idx)
-        key = self.tasks[idx]["key"]
-        item["key"] = key
-        item["participant_id"] = extract_participant_id(key)
+        item.update(build_grouped_task_metadata(self.tasks[idx], default_dataset_name=self.default_dataset_name))
         return item
 
 
@@ -133,21 +139,27 @@ def collate_fn_textonly(samples, tokenizer):
 
 
 def collate_fn_textonly_with_meta(samples, tokenizer):
-    keys = [sample["key"] for sample in samples]
-    participant_ids = [sample["participant_id"] for sample in samples]
+    dataset_names = [sample.pop("dataset_name") for sample in samples]
+    segment_keys = [sample.pop("segment_key") for sample in samples]
+    group_ids = [sample.pop("group_id") for sample in samples]
     target_texts = [sample["target"] for sample in samples]
     processed_data = collate_fn_textonly(samples, tokenizer)
-    processed_data["keys"] = keys
-    processed_data["participant_ids"] = participant_ids
+    processed_data["dataset_names"] = dataset_names
+    processed_data["segment_keys"] = segment_keys
+    processed_data["group_ids"] = group_ids
     processed_data["target_texts"] = target_texts
     return processed_data
 
 
 def collate_fn_qwen2audio_with_meta(samples, processor):
-    participant_ids = [sample["participant_id"] for sample in samples]
+    dataset_names = [sample.pop("dataset_name") for sample in samples]
+    segment_keys = [sample.pop("segment_key") for sample in samples]
+    group_ids = [sample.pop("group_id") for sample in samples]
     target_texts = [sample["target"] for sample in samples]
     processed_data = collate_fn_qwen2audio(samples, processor)
-    processed_data["participant_ids"] = participant_ids
+    processed_data["dataset_names"] = dataset_names
+    processed_data["segment_keys"] = segment_keys
+    processed_data["group_ids"] = group_ids
     processed_data["target_texts"] = target_texts
     return processed_data
 
@@ -325,17 +337,46 @@ def _log_trial_header(logger, trial_name, cfg, world_size, input_mode):
     logger.info("LoRA R: %s", cfg.peft.r)
     logger.info("LoRA Alpha: %s", cfg.peft.lora_alpha)
     logger.info("World Size: %s", world_size)
-    if getattr(cfg.data, "dataset_name", "") == "daic_woz":
-        logger.info("DAIC Eval Level: %s", cfg.eval.daic_eval_level)
-        logger.info("DAIC Eval Mode: %s", cfg.eval.daic_eval_mode)
-        logger.info("DAIC Person Threshold: %.4f", cfg.eval.daic_person_threshold)
+    for grouped_dataset_name in sorted(GROUPED_DATASET_NAMES):
+        logger.info(
+            "%s Eval: level=%s mode=%s threshold=%.4f",
+            grouped_dataset_name,
+            _grouped_eval_level(cfg, grouped_dataset_name),
+            _grouped_eval_mode(cfg, grouped_dataset_name),
+            _grouped_eval_threshold(cfg, grouped_dataset_name),
+        )
     logger.info("%s", "=" * 60)
+
+
+def _grouped_eval_level(cfg, dataset_name: str):
+    attr_name = f"{dataset_name.split('_')[0]}_eval_level" if dataset_name != "daic_woz" else "daic_eval_level"
+    return normalize_grouped_eval_level(getattr(cfg.eval, attr_name, "segment"))
+
+
+def _grouped_eval_mode(cfg, dataset_name: str):
+    attr_name = f"{dataset_name.split('_')[0]}_eval_mode" if dataset_name != "daic_woz" else "daic_eval_mode"
+    return getattr(cfg.eval, attr_name, "majority_vote")
+
+
+def _grouped_eval_threshold(cfg, dataset_name: str):
+    attr_name = f"{dataset_name.split('_')[0]}_person_threshold" if dataset_name != "daic_woz" else "daic_person_threshold"
+    return float(getattr(cfg.eval, attr_name, 0.5))
+
+
+def _primary_grouped_person_eval_dataset(cfg):
+    dataset_name = getattr(cfg.data, "dataset_name", "")
+    if grouped_eval_enabled(dataset_name) and _grouped_eval_level(cfg, dataset_name) == "person":
+        return dataset_name
+    return ""
+
+
+def _is_grouped_person_eval(cfg):
+    return bool(_primary_grouped_person_eval_dataset(cfg))
 
 
 def _is_daic_person_eval(cfg):
     return (
-        getattr(cfg.data, "dataset_name", "") == "daic_woz"
-        and getattr(cfg.eval, "daic_eval_level", DAIC_EVAL_LEVEL_PERSON) == DAIC_EVAL_LEVEL_PERSON
+        _primary_grouped_person_eval_dataset(cfg) == "daic_woz"
     )
 
 
@@ -343,16 +384,18 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
     eval_loss = 0.0
     eval_steps = 0
     global_stats = None
-    daic_local_records = []
+    grouped_local_records = []
     eval_bar = tqdm(eval_dataloader, desc="[Eval]") if rank == 0 else eval_dataloader
-    run_daic_person_eval = _is_daic_person_eval(cfg)
+    grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
+    run_grouped_person_eval = bool(grouped_dataset_name)
 
     model.eval()
     with torch.no_grad():
         for _, batch in enumerate(eval_bar):
-            keys = batch.pop("keys", None) if run_daic_person_eval else None
-            participant_ids = batch.pop("participant_ids", None) if run_daic_person_eval else None
-            target_texts = batch.pop("target_texts", None) if run_daic_person_eval else None
+            dataset_names = batch.pop("dataset_names", None) if run_grouped_person_eval else None
+            segment_keys = batch.pop("segment_keys", None) if run_grouped_person_eval else None
+            group_ids = batch.pop("group_ids", None) if run_grouped_person_eval else None
+            target_texts = batch.pop("target_texts", None) if run_grouped_person_eval else None
             if hasattr(batch, "to"):
                 batch = batch.to(device)
             else:
@@ -361,17 +404,17 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 outputs = model(**batch)
                 loss = outputs.loss
-                if run_daic_person_eval:
-                    daic_local_records.extend(
-                        build_daic_eval_records(
+                if run_grouped_person_eval:
+                    batch_grouped_records = build_grouped_eval_records(
                             metric_processor.tokenizer,
                             outputs.logits,
                             batch["labels"],
-                            keys,
-                            participant_ids,
+                            dataset_names,
+                            segment_keys,
+                            group_ids,
                             target_texts,
                         )
-                    )
+                    grouped_local_records.extend(batch_grouped_records.get(grouped_dataset_name, []))
                 else:
                     global_stats = compute_metrics_text_binary_accumulate(
                         metric_processor, outputs.logits, batch["labels"], global_stats
@@ -379,9 +422,9 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
 
             eval_loss += loss.item()
             eval_steps += 1
-            if rank == 0 and run_daic_person_eval:
+            if rank == 0 and run_grouped_person_eval:
                 eval_bar.set_description(
-                    f"[Eval] loss {loss:.3f} | segments {len(daic_local_records)}"
+                    f"[Eval] loss {loss:.3f} | segments {len(grouped_local_records)}"
                 )
             elif rank == 0 and global_stats and global_stats["total"] > 0:
                 temp_acc, _, _, temp_f1, temp_wf1 = compute_metrics_from_stats(global_stats)
@@ -393,16 +436,16 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
     dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
     reduced_eval_loss = (loss_tensor[0] / loss_tensor[1]).item() if loss_tensor[1] > 0 else 0.0
 
-    if run_daic_person_eval:
+    if run_grouped_person_eval:
         gathered_records = [None for _ in range(dist.get_world_size())]
-        dist.all_gather_object(gathered_records, daic_local_records)
+        dist.all_gather_object(gathered_records, grouped_local_records)
         merged_records = []
         for record_group in gathered_records:
             merged_records.extend(record_group or [])
-        reduced_stats = aggregate_participant_predictions(
+        reduced_stats = aggregate_group_predictions(
             merged_records,
-            mode=cfg.eval.daic_eval_mode,
-            threshold=cfg.eval.daic_person_threshold,
+            mode=_grouped_eval_mode(cfg, grouped_dataset_name),
+            threshold=_grouped_eval_threshold(cfg, grouped_dataset_name),
         )
         return reduced_eval_loss, reduced_stats
 
@@ -493,11 +536,12 @@ def train_textonly_ddp(cfg, trial_name=""):
         cfg.data.train_prompt_path,
         task_filename=cfg.data.train_task_filename,
     )
-    if _is_daic_person_eval(cfg):
+    if _is_grouped_person_eval(cfg):
         eval_dataset = TextOnlyEvalDatasetWithMeta(
             cfg.data.eval_data_path,
             cfg.data.val_prompt_path,
             task_filename=cfg.data.eval_task_filename,
+            default_dataset_name=cfg.data.dataset_name,
         )
         eval_collate = partial(collate_fn_textonly_with_meta, tokenizer=tokenizer)
     else:
@@ -608,7 +652,8 @@ def train_textonly_ddp(cfg, trial_name=""):
                         reduced_stats
                     )
                     _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
-                    metric_scope = "Person" if _is_daic_person_eval(cfg) else "Segment"
+                    grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
+                    metric_scope = f"Person ({grouped_dataset_name})" if grouped_dataset_name else "Segment"
                     logger.info("[Epoch %s Step %s] %s-Level Eval Metrics:", epoch, train_step, metric_scope)
                     logger.info(
                         "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
@@ -619,13 +664,13 @@ def train_textonly_ddp(cfg, trial_name=""):
                         eval_f1,
                         eval_wf1,
                     )
-                    if _is_daic_person_eval(cfg):
+                    if grouped_dataset_name:
                         logger.info(
                             "  Participants: %s, Unique Segments: %s, Mode: %s, Threshold: %.4f",
                             reduced_stats.get("num_participants", 0),
                             reduced_stats.get("num_segments", 0),
-                            cfg.eval.daic_eval_mode,
-                            cfg.eval.daic_person_threshold,
+                            _grouped_eval_mode(cfg, grouped_dataset_name),
+                            _grouped_eval_threshold(cfg, grouped_dataset_name),
                         )
 
                     if eval_f1 > best_f1:
@@ -704,13 +749,14 @@ def train_audiotext_ddp(cfg, trial_name=""):
         scp_filename=cfg.data.train_scp_filename,
         task_filename=cfg.data.train_task_filename,
     )
-    if _is_daic_person_eval(cfg):
+    if _is_grouped_person_eval(cfg):
         eval_dataset = AudioEvalDatasetWithMeta(
             cfg.data.eval_data_path,
             cfg.data.val_prompt_path,
             cfg.data.wav_type,
             scp_filename=cfg.data.eval_scp_filename,
             task_filename=cfg.data.eval_task_filename,
+            default_dataset_name=cfg.data.dataset_name,
         )
         eval_collate = partial(collate_fn_qwen2audio_with_meta, processor=processor)
     else:
@@ -836,7 +882,8 @@ def train_audiotext_ddp(cfg, trial_name=""):
                         reduced_stats
                     )
                     _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
-                    metric_scope = "Person" if _is_daic_person_eval(cfg) else "Segment"
+                    grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
+                    metric_scope = f"Person ({grouped_dataset_name})" if grouped_dataset_name else "Segment"
                     logger.info("[Epoch %s Step %s] %s-Level Eval Metrics:", epoch, train_step, metric_scope)
                     logger.info(
                         "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
@@ -847,13 +894,13 @@ def train_audiotext_ddp(cfg, trial_name=""):
                         eval_f1,
                         eval_wf1,
                     )
-                    if _is_daic_person_eval(cfg):
+                    if grouped_dataset_name:
                         logger.info(
                             "  Participants: %s, Unique Segments: %s, Mode: %s, Threshold: %.4f",
                             reduced_stats.get("num_participants", 0),
                             reduced_stats.get("num_segments", 0),
-                            cfg.eval.daic_eval_mode,
-                            cfg.eval.daic_person_threshold,
+                            _grouped_eval_mode(cfg, grouped_dataset_name),
+                            _grouped_eval_threshold(cfg, grouped_dataset_name),
                         )
 
                     if eval_f1 > best_f1:

@@ -9,6 +9,9 @@ MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
 STUDY_MODE="${STUDY_MODE:-cv_mean}" # cv_mean or per_fold
+CMDC_EVAL_LEVEL="${CMDC_EVAL_LEVEL:-person}"
+CMDC_EVAL_MODE="${CMDC_EVAL_MODE:-majority_vote}"
+CMDC_PERSON_THRESHOLD="${CMDC_PERSON_THRESHOLD:-0.5}"
 ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
 PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
 PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
@@ -25,12 +28,12 @@ case "${MODEL_FAMILY}:${PROMPT_MODE}" in
 esac
 
 N_TRIALS=${1:-20}
-STUDY_NAME_DEFAULT="cmdc_${MODEL_FAMILY}_${PROMPT_MODE}_${STUDY_MODE}_hpo_$(date +%Y%m%d_%H%M%S)"
+STUDY_NAME_DEFAULT="cmdc_${CMDC_EVAL_LEVEL}_${MODEL_FAMILY}_${PROMPT_MODE}_${STUDY_MODE}_hpo_$(date +%Y%m%d_%H%M%S)"
 STUDY_NAME=${2:-$STUDY_NAME_DEFAULT}
 CMDC_ROOT="${CMDC_ROOT:-$(pwd)/data/cmdc}"
-SAVE_ROOT="${SAVE_ROOT:-output_model/optuna_cmdc_5fold_hpo/${PROMPT_MODE}/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
-STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_cmdc_5fold_${STUDY_MODE}}"
-LOG_DIR="${LOG_DIR:-logs/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
+SAVE_ROOT="${SAVE_ROOT:-output_model/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}/${PROMPT_MODE}}"
+STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}}"
+LOG_DIR="${LOG_DIR:-logs/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}}"
 NUM_GPUS="${NUM_GPUS:-4}"
 PRUNING_FLAG="--disable-pruning"
 case "${ENABLE_PRUNING,,}" in
@@ -46,6 +49,9 @@ echo "Model Family: $MODEL_FAMILY"
 echo "Prompt Mode: $PROMPT_MODE"
 echo "Study Mode: $STUDY_MODE"
 echo "Number of Trials: $N_TRIALS"
+echo "CMDC Eval Level: $CMDC_EVAL_LEVEL"
+echo "CMDC Eval Mode: $CMDC_EVAL_MODE"
+echo "CMDC Person Threshold: $CMDC_PERSON_THRESHOLD"
 echo "Enable Pruning: $ENABLE_PRUNING"
 echo "Pruner Startup Trials: $PRUNER_STARTUP_TRIALS"
 echo "Pruner Warmup Steps: $PRUNER_WARMUP_STEPS"
@@ -72,6 +78,9 @@ if [ -d "/gpfs/projects/etur92" ]; then
     STUDY_NAME="$STUDY_NAME" \
     FOLDS="$FOLDS" \
     STUDY_MODE="$STUDY_MODE" \
+    CMDC_EVAL_LEVEL="$CMDC_EVAL_LEVEL" \
+    CMDC_EVAL_MODE="$CMDC_EVAL_MODE" \
+    CMDC_PERSON_THRESHOLD="$CMDC_PERSON_THRESHOLD" \
     CMDC_ROOT="$CMDC_ROOT" \
     SAVE_ROOT="$SAVE_ROOT" \
     STORAGE_PATH="$STORAGE_PATH" \
@@ -102,6 +111,9 @@ else
     export STUDY_MODE
     export MODEL_FAMILY
     export PROMPT_MODE
+    export CMDC_EVAL_LEVEL
+    export CMDC_EVAL_MODE
+    export CMDC_PERSON_THRESHOLD
 
     python optuna_hpo/hpo_cv_5fold.py \
         --n-trials "$N_TRIALS" \
@@ -114,6 +126,9 @@ else
         --model-family "$MODEL_FAMILY" \
         --prompt-mode "$PROMPT_MODE" \
         --study-mode "$STUDY_MODE" \
+        --cmdc-eval-level "$CMDC_EVAL_LEVEL" \
+        --cmdc-eval-mode "$CMDC_EVAL_MODE" \
+        --cmdc-person-threshold "$CMDC_PERSON_THRESHOLD" \
         --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
         --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
         --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \

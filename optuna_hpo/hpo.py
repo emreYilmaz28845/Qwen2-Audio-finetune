@@ -26,16 +26,6 @@ import torch
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from optuna_hpo.train_launcher import launch_ddp_training
-from utils.daic_eval import (
-    DAIC_EVAL_LEVEL_PERSON,
-    DAIC_EVAL_MODE_MAJORITY_VOTE,
-    SUPPORTED_DAIC_EVAL_LEVELS,
-    normalize_daic_eval_level,
-    SUPPORTED_DAIC_EVAL_MODES,
-    normalize_daic_eval_mode,
-    validate_daic_person_threshold,
-)
 from optuna_hpo.pruning import (
     DEFAULT_ENABLE_PRUNING,
     DEFAULT_PRUNER_INTERVAL_STEPS,
@@ -43,6 +33,17 @@ from optuna_hpo.pruning import (
     DEFAULT_PRUNER_WARMUP_STEPS,
     build_pruner,
     env_flag,
+)
+from optuna_hpo.train_launcher import launch_ddp_training
+from utils.grouped_eval import (
+    GROUPED_DATASET_NAMES,
+    SUPPORTED_GROUPED_EVAL_LEVELS,
+    SUPPORTED_GROUPED_EVAL_MODES,
+    grouped_eval_enabled,
+    grouped_eval_env_prefix,
+    normalize_grouped_eval_level,
+    normalize_grouped_eval_mode,
+    validate_grouped_person_threshold,
 )
 
 
@@ -69,6 +70,9 @@ PROMPT_MODE_FULL = "full"
 
 TASK_VARIANT_DEFAULT = "default"
 TASK_VARIANT_FILTERED = "filtered"
+
+DEFAULT_GROUPED_EVAL_LEVEL = "person"
+DEFAULT_GROUPED_EVAL_MODE = "majority_vote"
 
 
 @dataclass
@@ -132,37 +136,97 @@ def default_save_root(dataset_name: str, prompt_mode: str):
     return f"output_model/optuna_{dataset_name}_hpo/{prompt_mode}"
 
 
-def default_study_name(dataset_name: str, model_family: str, prompt_mode: str):
-    timestamp = os.environ.get("STUDY_TIMESTAMP", "")
-    if not timestamp:
-        timestamp = __import__("time").strftime("%Y%m%d_%H%M%S")
-    return f"{dataset_name}_{model_family}_{prompt_mode}_hpo_{timestamp}"
+def _normalized_grouped_eval_values(level: str, mode: str, threshold: float):
+    return (
+        normalize_grouped_eval_level(level),
+        normalize_grouped_eval_mode(mode),
+        validate_grouped_person_threshold(threshold),
+    )
 
 
-def _daic_eval_level_suffix(dataset_name: str, daic_eval_level: str):
-    if dataset_name != DATASET_DAIC_WOZ:
+def resolve_grouped_eval_settings(args_or_mapping):
+    settings = {}
+    for dataset_name in sorted(GROUPED_DATASET_NAMES):
+        level = getattr(
+            args_or_mapping,
+            f"{dataset_name}_eval_level",
+            None,
+        )
+        if level is None and isinstance(args_or_mapping, dict):
+            level = args_or_mapping.get(f"{dataset_name}_eval_level")
+        mode = getattr(
+            args_or_mapping,
+            f"{dataset_name}_eval_mode",
+            None,
+        )
+        if mode is None and isinstance(args_or_mapping, dict):
+            mode = args_or_mapping.get(f"{dataset_name}_eval_mode")
+        threshold = getattr(
+            args_or_mapping,
+            f"{dataset_name}_person_threshold",
+            None,
+        )
+        if threshold is None and isinstance(args_or_mapping, dict):
+            threshold = args_or_mapping.get(f"{dataset_name}_person_threshold")
+        if dataset_name == DATASET_DAIC_WOZ:
+            legacy_level = getattr(args_or_mapping, "daic_eval_level", None)
+            legacy_mode = getattr(args_or_mapping, "daic_eval_mode", None)
+            legacy_threshold = getattr(args_or_mapping, "daic_person_threshold", None)
+            if isinstance(args_or_mapping, dict):
+                legacy_level = args_or_mapping.get("daic_eval_level", legacy_level)
+                legacy_mode = args_or_mapping.get("daic_eval_mode", legacy_mode)
+                legacy_threshold = args_or_mapping.get("daic_person_threshold", legacy_threshold)
+            level = level or legacy_level or os.environ.get("DAIC_EVAL_LEVEL")
+            mode = mode or legacy_mode or os.environ.get("DAIC_EVAL_MODE")
+            threshold = threshold if threshold is not None else legacy_threshold
+            if threshold is None and os.environ.get("DAIC_PERSON_THRESHOLD") is not None:
+                threshold = os.environ.get("DAIC_PERSON_THRESHOLD")
+
+        prefix = grouped_eval_env_prefix(dataset_name)
+        level = level or os.environ.get(f"{prefix}_EVAL_LEVEL", DEFAULT_GROUPED_EVAL_LEVEL)
+        mode = mode or os.environ.get(f"{prefix}_EVAL_MODE", DEFAULT_GROUPED_EVAL_MODE)
+        threshold = (
+            threshold
+            if threshold is not None
+            else os.environ.get(f"{prefix}_PERSON_THRESHOLD", "0.5")
+        )
+        normalized_level, normalized_mode, normalized_threshold = _normalized_grouped_eval_values(
+            level,
+            mode,
+            float(threshold),
+        )
+        settings[dataset_name] = {
+            "level": normalized_level,
+            "mode": normalized_mode,
+            "threshold": normalized_threshold,
+        }
+    return settings
+
+
+def grouped_level_suffix(dataset_name: str, grouped_settings: dict):
+    if not grouped_eval_enabled(dataset_name):
         return ""
-    return f"_{normalize_daic_eval_level(daic_eval_level)}"
+    return f"_{grouped_settings[dataset_name]['level']}"
 
 
-def resolved_log_dir(dataset_name: str, daic_eval_level: str):
-    return f"{default_log_dir(dataset_name)}{_daic_eval_level_suffix(dataset_name, daic_eval_level)}"
+def resolved_log_dir(dataset_name: str, grouped_settings: dict):
+    return f"{default_log_dir(dataset_name)}{grouped_level_suffix(dataset_name, grouped_settings)}"
 
 
-def resolved_storage_path(dataset_name: str, daic_eval_level: str):
-    return f"{default_storage_path(dataset_name)}{_daic_eval_level_suffix(dataset_name, daic_eval_level)}"
+def resolved_storage_path(dataset_name: str, grouped_settings: dict):
+    return f"{default_storage_path(dataset_name)}{grouped_level_suffix(dataset_name, grouped_settings)}"
 
 
-def resolved_save_root(dataset_name: str, prompt_mode: str, daic_eval_level: str):
-    suffix = _daic_eval_level_suffix(dataset_name, daic_eval_level)
-    return f"output_model/optuna_{dataset_name}{suffix}_hpo/{prompt_mode}"
+def resolved_save_root(dataset_name: str, prompt_mode: str, grouped_settings: dict):
+    suffix = grouped_level_suffix(dataset_name, grouped_settings)
+    return f"output_model/optuna_{dataset_name}_hpo{suffix}/{prompt_mode}"
 
 
-def resolved_study_name(dataset_name: str, model_family: str, prompt_mode: str, daic_eval_level: str):
+def resolved_study_name(dataset_name: str, model_family: str, prompt_mode: str, grouped_settings: dict):
     timestamp = os.environ.get("STUDY_TIMESTAMP", "")
     if not timestamp:
         timestamp = __import__("time").strftime("%Y%m%d_%H%M%S")
-    suffix = _daic_eval_level_suffix(dataset_name, daic_eval_level)
+    suffix = grouped_level_suffix(dataset_name, grouped_settings)
     return f"{dataset_name}{suffix}_{model_family}_{prompt_mode}_hpo_{timestamp}"
 
 
@@ -229,6 +293,19 @@ def apply_dataset_env(dataset_cfg: DatasetConfig):
     os.environ["EVAL_DATA_PATH"] = dataset_cfg.eval_data_path
 
 
+def apply_grouped_eval_env(grouped_settings: dict):
+    for dataset_name, values in grouped_settings.items():
+        prefix = grouped_eval_env_prefix(dataset_name)
+        os.environ[f"{prefix}_EVAL_LEVEL"] = values["level"]
+        os.environ[f"{prefix}_EVAL_MODE"] = values["mode"]
+        os.environ[f"{prefix}_PERSON_THRESHOLD"] = str(values["threshold"])
+
+    daic_values = grouped_settings[DATASET_DAIC_WOZ]
+    os.environ["DAIC_EVAL_LEVEL"] = daic_values["level"]
+    os.environ["DAIC_EVAL_MODE"] = daic_values["mode"]
+    os.environ["DAIC_PERSON_THRESHOLD"] = str(daic_values["threshold"])
+
+
 def build_objective(
     dataset_cfg: DatasetConfig,
     model_path: str,
@@ -236,9 +313,7 @@ def build_objective(
     num_gpus: int,
     model_family: str,
     enable_pruning: bool,
-    daic_eval_level: str,
-    daic_eval_mode: str,
-    daic_person_threshold: float,
+    grouped_settings: dict,
 ):
     launch_input_mode = resolve_launch_input_mode(model_family)
 
@@ -258,9 +333,14 @@ def build_objective(
         logger.info("  Model Family: %s", model_family)
         logger.info("  Prompt Mode: %s", os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY))
         logger.info("  Launch Input Mode: %s", launch_input_mode)
-        logger.info("  DAIC Eval Level: %s", daic_eval_level)
-        logger.info("  DAIC Eval Mode: %s", daic_eval_mode)
-        logger.info("  DAIC Person Threshold: %.4f", daic_person_threshold)
+        for grouped_dataset_name in sorted(GROUPED_DATASET_NAMES):
+            logger.info(
+                "  %s Eval: level=%s mode=%s threshold=%.4f",
+                grouped_dataset_name,
+                grouped_settings[grouped_dataset_name]["level"],
+                grouped_settings[grouped_dataset_name]["mode"],
+                grouped_settings[grouped_dataset_name]["threshold"],
+            )
         logger.info("%s\n", "=" * 70)
 
         trial_params = {
@@ -283,9 +363,9 @@ def build_objective(
             num_gpus=num_gpus,
             enable_pruning=enable_pruning,
             prune_mode="eval" if enable_pruning else "disabled",
-            daic_eval_level=daic_eval_level,
-            daic_eval_mode=daic_eval_mode,
-            daic_person_threshold=daic_person_threshold,
+            daic_eval_level=grouped_settings[DATASET_DAIC_WOZ]["level"],
+            daic_eval_mode=grouped_settings[DATASET_DAIC_WOZ]["mode"],
+            daic_person_threshold=grouped_settings[DATASET_DAIC_WOZ]["threshold"],
         )
 
         logger.info("\nTrial %s completed with Best F1: %.4f\n", trial.number, best_f1)
@@ -307,21 +387,17 @@ def run_optimization(
     pruner_startup_trials=DEFAULT_PRUNER_STARTUP_TRIALS,
     pruner_warmup_steps=DEFAULT_PRUNER_WARMUP_STEPS,
     pruner_interval_steps=DEFAULT_PRUNER_INTERVAL_STEPS,
-    daic_eval_level=DAIC_EVAL_LEVEL_PERSON,
-    daic_eval_mode=DAIC_EVAL_MODE_MAJORITY_VOTE,
-    daic_person_threshold=0.5,
+    grouped_settings=None,
 ):
     validate_mode_combination(model_family, prompt_mode)
-    daic_eval_level = normalize_daic_eval_level(daic_eval_level)
-    daic_eval_mode = normalize_daic_eval_mode(daic_eval_mode)
-    daic_person_threshold = validate_daic_person_threshold(daic_person_threshold)
+    grouped_settings = grouped_settings or resolve_grouped_eval_settings({})
     dataset_cfg = get_dataset_config(dataset_name, prompt_mode, task_variant)
     apply_dataset_env(dataset_cfg)
 
     launch_input_mode = resolve_launch_input_mode(model_family)
-    storage_path = storage_path or resolved_storage_path(dataset_name, daic_eval_level)
-    save_root = save_root or resolved_save_root(dataset_name, prompt_mode, daic_eval_level)
-    study_name = study_name or resolved_study_name(dataset_name, model_family, prompt_mode, daic_eval_level)
+    storage_path = storage_path or resolved_storage_path(dataset_name, grouped_settings)
+    save_root = save_root or resolved_save_root(dataset_name, prompt_mode, grouped_settings)
+    study_name = study_name or resolved_study_name(dataset_name, model_family, prompt_mode, grouped_settings)
     model_path = resolve_model_path(model_family)
     num_gpus = int(os.environ.get("NUM_GPUS", "4"))
 
@@ -331,9 +407,7 @@ def run_optimization(
     os.environ["STORAGE_PATH"] = storage_path
     os.environ["SAVE_PATH"] = save_root
     os.environ["DATASET_NAME"] = dataset_name
-    os.environ["DAIC_EVAL_LEVEL"] = daic_eval_level
-    os.environ["DAIC_EVAL_MODE"] = daic_eval_mode
-    os.environ["DAIC_PERSON_THRESHOLD"] = str(daic_person_threshold)
+    apply_grouped_eval_env(grouped_settings)
 
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
@@ -351,9 +425,14 @@ def run_optimization(
     logger.info("  Pruner Startup Trials: %s", pruner_startup_trials)
     logger.info("  Pruner Warmup Steps: %s", pruner_warmup_steps)
     logger.info("  Pruner Interval Steps: %s", pruner_interval_steps)
-    logger.info("  DAIC Eval Level: %s", daic_eval_level)
-    logger.info("  DAIC Eval Mode: %s", daic_eval_mode)
-    logger.info("  DAIC Person Threshold: %.4f", daic_person_threshold)
+    for grouped_dataset_name in sorted(GROUPED_DATASET_NAMES):
+        logger.info(
+            "  %s Eval: level=%s mode=%s threshold=%.4f",
+            grouped_dataset_name,
+            grouped_settings[grouped_dataset_name]["level"],
+            grouped_settings[grouped_dataset_name]["mode"],
+            grouped_settings[grouped_dataset_name]["threshold"],
+        )
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  Storage: %s", storage)
     logger.info("  Save Root: %s", save_root)
@@ -379,9 +458,7 @@ def run_optimization(
         num_gpus=num_gpus,
         model_family=model_family,
         enable_pruning=enable_pruning,
-        daic_eval_level=daic_eval_level,
-        daic_eval_mode=daic_eval_mode,
-        daic_person_threshold=daic_person_threshold,
+        grouped_settings=grouped_settings,
     )
 
     try:
@@ -432,9 +509,7 @@ def run_optimization(
         "pruner_startup_trials": pruner_startup_trials,
         "pruner_warmup_steps": pruner_warmup_steps,
         "pruner_interval_steps": pruner_interval_steps,
-        "daic_eval_level": daic_eval_level,
-        "daic_eval_mode": daic_eval_mode,
-        "daic_person_threshold": daic_person_threshold,
+        "grouped_eval": grouped_settings,
         "n_trials": len(study.trials),
         "n_completed": len(completed_trials_df),
         "best_trial_number": best_trial.number if best_trial is not None else None,
@@ -461,8 +536,6 @@ def run_optimization(
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="Optuna hyperparameter optimization for merged, DAIC, and EATD Qwen training"
     )
@@ -534,20 +607,40 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--daic-eval-level",
+        dest="daic_woz_eval_level",
         type=str,
-        choices=sorted(SUPPORTED_DAIC_EVAL_LEVELS),
-        default=os.environ.get("DAIC_EVAL_LEVEL", DAIC_EVAL_LEVEL_PERSON),
+        choices=sorted(SUPPORTED_GROUPED_EVAL_LEVELS),
+        default=os.environ.get("DAIC_WOZ_EVAL_LEVEL", os.environ.get("DAIC_EVAL_LEVEL", DEFAULT_GROUPED_EVAL_LEVEL)),
     )
     parser.add_argument(
         "--daic-eval-mode",
+        dest="daic_woz_eval_mode",
         type=str,
-        choices=sorted(SUPPORTED_DAIC_EVAL_MODES),
-        default=os.environ.get("DAIC_EVAL_MODE", DAIC_EVAL_MODE_MAJORITY_VOTE),
+        choices=sorted(SUPPORTED_GROUPED_EVAL_MODES),
+        default=os.environ.get("DAIC_WOZ_EVAL_MODE", os.environ.get("DAIC_EVAL_MODE", DEFAULT_GROUPED_EVAL_MODE)),
     )
     parser.add_argument(
         "--daic-person-threshold",
+        dest="daic_woz_person_threshold",
         type=float,
-        default=float(os.environ.get("DAIC_PERSON_THRESHOLD", "0.5")),
+        default=float(os.environ.get("DAIC_WOZ_PERSON_THRESHOLD", os.environ.get("DAIC_PERSON_THRESHOLD", "0.5"))),
+    )
+    parser.add_argument(
+        "--eatd-eval-level",
+        type=str,
+        choices=sorted(SUPPORTED_GROUPED_EVAL_LEVELS),
+        default=os.environ.get("EATD_EVAL_LEVEL", DEFAULT_GROUPED_EVAL_LEVEL),
+    )
+    parser.add_argument(
+        "--eatd-eval-mode",
+        type=str,
+        choices=sorted(SUPPORTED_GROUPED_EVAL_MODES),
+        default=os.environ.get("EATD_EVAL_MODE", DEFAULT_GROUPED_EVAL_MODE),
+    )
+    parser.add_argument(
+        "--eatd-person-threshold",
+        type=float,
+        default=float(os.environ.get("EATD_PERSON_THRESHOLD", "0.5")),
     )
 
     args = parser.parse_args()
@@ -571,7 +664,5 @@ if __name__ == "__main__":
         pruner_startup_trials=args.pruner_startup_trials,
         pruner_warmup_steps=args.pruner_warmup_steps,
         pruner_interval_steps=args.pruner_interval_steps,
-        daic_eval_level=args.daic_eval_level,
-        daic_eval_mode=args.daic_eval_mode,
-        daic_person_threshold=args.daic_person_threshold,
+        grouped_settings=resolve_grouped_eval_settings(args),
     )

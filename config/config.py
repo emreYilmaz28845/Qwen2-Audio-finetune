@@ -40,6 +40,12 @@ class EvalConfig:
     daic_eval_level: str = "person"
     daic_eval_mode: str = "majority_vote"
     daic_person_threshold: float = 0.5
+    eatd_eval_level: str = "person"
+    eatd_eval_mode: str = "majority_vote"
+    eatd_person_threshold: float = 0.5
+    cmdc_eval_level: str = "person"
+    cmdc_eval_mode: str = "majority_vote"
+    cmdc_person_threshold: float = 0.5
 
 @dataclass
 class DataConfig:

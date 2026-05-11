@@ -32,6 +32,13 @@ from optuna_hpo.pruning import (
     build_pruner,
     env_flag,
 )
+from utils.grouped_eval import (
+    SUPPORTED_GROUPED_EVAL_LEVELS,
+    SUPPORTED_GROUPED_EVAL_MODES,
+    normalize_grouped_eval_level,
+    normalize_grouped_eval_mode,
+    validate_grouped_person_threshold,
+)
 
 
 logging.basicConfig(
@@ -50,6 +57,8 @@ MODEL_FAMILY_AUDIO = "audio"
 PROMPT_MODE_TEXTONLY = "textonly"
 PROMPT_MODE_AUDIOTEXT = "audiotext"
 PROMPT_MODE_FULL = "full"
+DEFAULT_CMDC_EVAL_LEVEL = "person"
+DEFAULT_CMDC_EVAL_MODE = "majority_vote"
 
 
 def parse_folds(folds_text: str):
@@ -62,6 +71,10 @@ def default_save_root_for_study_mode(study_mode: str):
 
 def default_storage_path_for_study_mode(study_mode: str):
     return f"optuna_studies/optuna_cmdc_cv_5fold_{study_mode}"
+
+
+def cmdc_level_suffix(cmdc_eval_level: str):
+    return f"_{normalize_grouped_eval_level(cmdc_eval_level)}"
 
 
 def normalize_model_family(model_family: str):
@@ -248,6 +261,9 @@ def run_fold_trial(
     model_family,
     prompt_mode,
     enable_pruning,
+    cmdc_eval_level,
+    cmdc_eval_mode,
+    cmdc_person_threshold,
 ):
     previous_env = {
         "TRAIN_PROMPT_FILE": os.environ.get("TRAIN_PROMPT_FILE"),
@@ -258,6 +274,9 @@ def run_fold_trial(
         "EVAL_SCP_FILE": os.environ.get("EVAL_SCP_FILE"),
         "MODEL_FAMILY": os.environ.get("MODEL_FAMILY"),
         "PROMPT_MODE": os.environ.get("PROMPT_MODE"),
+        "CMDC_EVAL_LEVEL": os.environ.get("CMDC_EVAL_LEVEL"),
+        "CMDC_EVAL_MODE": os.environ.get("CMDC_EVAL_MODE"),
+        "CMDC_PERSON_THRESHOLD": os.environ.get("CMDC_PERSON_THRESHOLD"),
     }
 
     os.environ["TRAIN_PROMPT_FILE"] = fold_cfg["train_prompt_file"]
@@ -268,6 +287,9 @@ def run_fold_trial(
     os.environ["EVAL_SCP_FILE"] = fold_cfg["eval_scp_file"]
     os.environ["MODEL_FAMILY"] = model_family
     os.environ["PROMPT_MODE"] = prompt_mode
+    os.environ["CMDC_EVAL_LEVEL"] = cmdc_eval_level
+    os.environ["CMDC_EVAL_MODE"] = cmdc_eval_mode
+    os.environ["CMDC_PERSON_THRESHOLD"] = str(cmdc_person_threshold)
 
     fold_save_path = os.path.join(save_root, f"trial_{trial.number:03d}", fold_name)
 
@@ -317,6 +339,9 @@ def build_objective(
     model_family,
     prompt_mode,
     enable_pruning,
+    cmdc_eval_level,
+    cmdc_eval_mode,
+    cmdc_person_threshold,
 ):
     launch_input_mode = resolve_launch_input_mode(model_family)
 
@@ -346,6 +371,9 @@ def build_objective(
                     model_family=model_family,
                     prompt_mode=prompt_mode,
                     enable_pruning=False,
+                    cmdc_eval_level=cmdc_eval_level,
+                    cmdc_eval_mode=cmdc_eval_mode,
+                    cmdc_person_threshold=cmdc_person_threshold,
                 )
                 fold_results.append(fold_result)
                 valid_fold_scores = [
@@ -439,6 +467,9 @@ def build_single_fold_objective(
     model_family,
     prompt_mode,
     enable_pruning,
+    cmdc_eval_level,
+    cmdc_eval_mode,
+    cmdc_person_threshold,
 ):
     fold_cfg = get_fold_config(cmdc_root, fold_name, prompt_mode)
     launch_input_mode = resolve_launch_input_mode(model_family)
@@ -466,6 +497,9 @@ def build_single_fold_objective(
                 model_family=model_family,
                 prompt_mode=prompt_mode,
                 enable_pruning=enable_pruning,
+                cmdc_eval_level=cmdc_eval_level,
+                cmdc_eval_mode=cmdc_eval_mode,
+                cmdc_person_threshold=cmdc_person_threshold,
             )
         except optuna.TrialPruned:
             raise
@@ -568,9 +602,15 @@ def run_optimization(
     pruner_startup_trials=DEFAULT_PRUNER_STARTUP_TRIALS,
     pruner_warmup_steps=DEFAULT_PRUNER_WARMUP_STEPS,
     pruner_interval_steps=DEFAULT_PRUNER_INTERVAL_STEPS,
+    cmdc_eval_level=DEFAULT_CMDC_EVAL_LEVEL,
+    cmdc_eval_mode=DEFAULT_CMDC_EVAL_MODE,
+    cmdc_person_threshold=0.5,
 ):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
+    cmdc_eval_level = normalize_grouped_eval_level(cmdc_eval_level)
+    cmdc_eval_mode = normalize_grouped_eval_mode(cmdc_eval_mode)
+    cmdc_person_threshold = validate_grouped_person_threshold(cmdc_person_threshold)
     validate_mode_combination(model_family, prompt_mode)
     validate_audio_fold_configs(cmdc_root, folds, prompt_mode, model_family)
 
@@ -585,6 +625,9 @@ def run_optimization(
     logger.info("  Pruner Startup Trials: %s", pruner_startup_trials)
     logger.info("  Pruner Warmup Steps: %s", pruner_warmup_steps)
     logger.info("  Pruner Interval Steps: %s", pruner_interval_steps)
+    logger.info("  CMDC Eval Level: %s", cmdc_eval_level)
+    logger.info("  CMDC Eval Mode: %s", cmdc_eval_mode)
+    logger.info("  CMDC Person Threshold: %.4f", cmdc_person_threshold)
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
@@ -616,6 +659,9 @@ def run_optimization(
         model_family=model_family,
         prompt_mode=prompt_mode,
         enable_pruning=enable_pruning,
+        cmdc_eval_level=cmdc_eval_level,
+        cmdc_eval_mode=cmdc_eval_mode,
+        cmdc_person_threshold=cmdc_person_threshold,
     )
 
     results_file = os.path.join(storage_path, f"{study_name}_results.json")
@@ -659,6 +705,9 @@ def run_optimization(
             "pruner_startup_trials": pruner_startup_trials,
             "pruner_warmup_steps": pruner_warmup_steps,
             "pruner_interval_steps": pruner_interval_steps,
+            "cmdc_eval_level": cmdc_eval_level,
+            "cmdc_eval_mode": cmdc_eval_mode,
+            "cmdc_person_threshold": cmdc_person_threshold,
             "best_trial_number": best_trial.number if best_trial is not None else None,
             "best_mean_f1": float(best_trial.value) if best_trial is not None else None,
             "best_params": dict(best_trial.params) if best_trial is not None else None,
@@ -689,9 +738,15 @@ def run_per_fold_optimization(
     pruner_startup_trials=DEFAULT_PRUNER_STARTUP_TRIALS,
     pruner_warmup_steps=DEFAULT_PRUNER_WARMUP_STEPS,
     pruner_interval_steps=DEFAULT_PRUNER_INTERVAL_STEPS,
+    cmdc_eval_level=DEFAULT_CMDC_EVAL_LEVEL,
+    cmdc_eval_mode=DEFAULT_CMDC_EVAL_MODE,
+    cmdc_person_threshold=0.5,
 ):
     os.makedirs(storage_path, exist_ok=True)
     os.makedirs(save_root, exist_ok=True)
+    cmdc_eval_level = normalize_grouped_eval_level(cmdc_eval_level)
+    cmdc_eval_mode = normalize_grouped_eval_mode(cmdc_eval_mode)
+    cmdc_person_threshold = validate_grouped_person_threshold(cmdc_person_threshold)
     validate_mode_combination(model_family, prompt_mode)
     validate_audio_fold_configs(cmdc_root, folds, prompt_mode, model_family)
 
@@ -706,6 +761,9 @@ def run_per_fold_optimization(
     logger.info("  Pruner Startup Trials: %s", pruner_startup_trials)
     logger.info("  Pruner Warmup Steps: %s", pruner_warmup_steps)
     logger.info("  Pruner Interval Steps: %s", pruner_interval_steps)
+    logger.info("  CMDC Eval Level: %s", cmdc_eval_level)
+    logger.info("  CMDC Eval Mode: %s", cmdc_eval_mode)
+    logger.info("  CMDC Person Threshold: %.4f", cmdc_person_threshold)
     logger.info("  Trials Per Fold: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
@@ -752,6 +810,9 @@ def run_per_fold_optimization(
             model_family=model_family,
             prompt_mode=prompt_mode,
             enable_pruning=enable_pruning,
+            cmdc_eval_level=cmdc_eval_level,
+            cmdc_eval_mode=cmdc_eval_mode,
+            cmdc_person_threshold=cmdc_person_threshold,
         )
 
         try:
@@ -790,6 +851,9 @@ def run_per_fold_optimization(
             "pruner_startup_trials": pruner_startup_trials,
             "pruner_warmup_steps": pruner_warmup_steps,
             "pruner_interval_steps": pruner_interval_steps,
+            "cmdc_eval_level": cmdc_eval_level,
+            "cmdc_eval_mode": cmdc_eval_mode,
+            "cmdc_person_threshold": cmdc_person_threshold,
             "n_trials": len(study.trials),
             "n_completed": len(completed_trials),
             "cmdc_root": cmdc_root,
@@ -850,6 +914,9 @@ def run_per_fold_optimization(
         "pruner_startup_trials": pruner_startup_trials,
         "pruner_warmup_steps": pruner_warmup_steps,
         "pruner_interval_steps": pruner_interval_steps,
+        "cmdc_eval_level": cmdc_eval_level,
+        "cmdc_eval_mode": cmdc_eval_mode,
+        "cmdc_person_threshold": cmdc_person_threshold,
         "trials_per_fold": n_trials,
         "cmdc_root": cmdc_root,
         "save_root": os.path.abspath(save_root),
@@ -950,6 +1017,23 @@ def main():
         type=int,
         default=int(os.environ.get("PRUNER_INTERVAL_STEPS", DEFAULT_PRUNER_INTERVAL_STEPS)),
     )
+    parser.add_argument(
+        "--cmdc-eval-level",
+        type=str,
+        choices=sorted(SUPPORTED_GROUPED_EVAL_LEVELS),
+        default=os.environ.get("CMDC_EVAL_LEVEL", DEFAULT_CMDC_EVAL_LEVEL),
+    )
+    parser.add_argument(
+        "--cmdc-eval-mode",
+        type=str,
+        choices=sorted(SUPPORTED_GROUPED_EVAL_MODES),
+        default=os.environ.get("CMDC_EVAL_MODE", DEFAULT_CMDC_EVAL_MODE),
+    )
+    parser.add_argument(
+        "--cmdc-person-threshold",
+        type=float,
+        default=float(os.environ.get("CMDC_PERSON_THRESHOLD", "0.5")),
+    )
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -969,6 +1053,9 @@ def main():
     os.environ["PROMPT_MODE"] = prompt_mode
     os.environ["STORAGE_PATH"] = storage_path
     os.environ["SAVE_ROOT"] = save_root
+    os.environ["CMDC_EVAL_LEVEL"] = normalize_grouped_eval_level(args.cmdc_eval_level)
+    os.environ["CMDC_EVAL_MODE"] = normalize_grouped_eval_mode(args.cmdc_eval_mode)
+    os.environ["CMDC_PERSON_THRESHOLD"] = str(validate_grouped_person_threshold(args.cmdc_person_threshold))
     if args.study_mode == "per_fold":
         run_per_fold_optimization(
             n_trials=args.n_trials,
@@ -986,6 +1073,9 @@ def main():
             pruner_startup_trials=args.pruner_startup_trials,
             pruner_warmup_steps=args.pruner_warmup_steps,
             pruner_interval_steps=args.pruner_interval_steps,
+            cmdc_eval_level=args.cmdc_eval_level,
+            cmdc_eval_mode=args.cmdc_eval_mode,
+            cmdc_person_threshold=args.cmdc_person_threshold,
         )
     else:
         run_optimization(
@@ -1004,6 +1094,9 @@ def main():
             pruner_startup_trials=args.pruner_startup_trials,
             pruner_warmup_steps=args.pruner_warmup_steps,
             pruner_interval_steps=args.pruner_interval_steps,
+            cmdc_eval_level=args.cmdc_eval_level,
+            cmdc_eval_mode=args.cmdc_eval_mode,
+            cmdc_person_threshold=args.cmdc_person_threshold,
         )
 
 

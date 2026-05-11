@@ -28,12 +28,22 @@ def _load_repo_config_class():
 
 Config = _load_repo_config_class()
 from optuna_hpo.train_ddp import train_ddp
+from utils.grouped_eval import GROUPED_DATASET_NAMES
 
 
 def derive_input_mode(model_family: str):
     if model_family == "audio":
         return "audiotext"
     return "textonly"
+
+
+def _grouped_eval_values(config_data, dataset_name: str):
+    prefix = dataset_name.upper()
+    return (
+        config_data.get(f"{dataset_name}_eval_level", os.environ.get(f"{prefix}_EVAL_LEVEL", "person")),
+        config_data.get(f"{dataset_name}_eval_mode", os.environ.get(f"{prefix}_EVAL_MODE", "majority_vote")),
+        float(config_data.get(f"{dataset_name}_person_threshold", os.environ.get(f"{prefix}_PERSON_THRESHOLD", "0.5"))),
+    )
 
 
 def main():
@@ -57,11 +67,10 @@ def main():
     progress_file = config_data.get("progress_file")
     result_file = config_data.get("result_file")
     stop_file = config_data.get("stop_file")
-    daic_eval_level = config_data.get("daic_eval_level", os.environ.get("DAIC_EVAL_LEVEL", "person"))
-    daic_eval_mode = config_data.get("daic_eval_mode", os.environ.get("DAIC_EVAL_MODE", "majority_vote"))
-    daic_person_threshold = float(
-        config_data.get("daic_person_threshold", os.environ.get("DAIC_PERSON_THRESHOLD", "0.5"))
-    )
+    grouped_cfg = {
+        grouped_dataset_name: _grouped_eval_values(config_data, grouped_dataset_name)
+        for grouped_dataset_name in GROUPED_DATASET_NAMES
+    }
     
     # Create config for training
     cfg = Config()
@@ -103,9 +112,9 @@ def main():
     cfg.data.wav_type = wav_type
     cfg.env.progress_file = progress_file or ""
     cfg.env.stop_file = stop_file or ""
-    cfg.eval.daic_eval_level = daic_eval_level
-    cfg.eval.daic_eval_mode = daic_eval_mode
-    cfg.eval.daic_person_threshold = daic_person_threshold
+    cfg.eval.daic_eval_level, cfg.eval.daic_eval_mode, cfg.eval.daic_person_threshold = grouped_cfg["daic_woz"]
+    cfg.eval.eatd_eval_level, cfg.eval.eatd_eval_mode, cfg.eval.eatd_person_threshold = grouped_cfg["eatd"]
+    cfg.eval.cmdc_eval_level, cfg.eval.cmdc_eval_mode, cfg.eval.cmdc_person_threshold = grouped_cfg["cmdc"]
     
     # Run training
     trial_name = f"trial_{trial_number:03d}_lr{trial_params['lr']:.0e}_bs{trial_params['batch_size']}_r{trial_params['lora_r']}_a{trial_params['lora_alpha']}"
@@ -127,9 +136,14 @@ def main():
             "trial_params": trial_params,
             "input_mode": input_mode,
             "dataset_name": dataset_name,
-            "daic_eval_level": daic_eval_level,
-            "daic_eval_mode": daic_eval_mode,
-            "daic_person_threshold": daic_person_threshold,
+            "grouped_eval": {
+                grouped_dataset_name: {
+                    "level": grouped_cfg[grouped_dataset_name][0],
+                    "mode": grouped_cfg[grouped_dataset_name][1],
+                    "threshold": grouped_cfg[grouped_dataset_name][2],
+                }
+                for grouped_dataset_name in sorted(GROUPED_DATASET_NAMES)
+            },
         }
 
         if result_file:

@@ -13,8 +13,11 @@
 #   PROMPT_MODE=full|audiotext|textonly
 #   CHECKPOINT_MODE=auto|full_audio
 #   ADAPTER_PATH=/path/to/audio_adapter_state.pt
-#   DATASET_NAME=merged|daic_woz|eatd
-#   DAIC_EVAL_LEVEL=person|segment
+#   DATASET_NAME=merged|daic_woz|eatd|cmdc
+#   CMDC_FOLD=fold1
+#   DAIC_WOZ_EVAL_LEVEL=person|segment
+#   EATD_EVAL_LEVEL=person|segment
+#   CMDC_EVAL_LEVEL=person|segment
 #   LOG_DIR=/custom/log/dir
 #   RESULTS_DIR=/custom/results/dir
 #   OUTPUT_JSON=/custom/results.json
@@ -32,9 +35,16 @@ MODEL_FAMILY="${MODEL_FAMILY:-audio}"
 CHECKPOINT_MODE="${CHECKPOINT_MODE:-auto}"
 ADAPTER_PATH="${ADAPTER_PATH:-}"
 DATASET_NAME="${DATASET_NAME:-merged}"
-DAIC_EVAL_LEVEL="${DAIC_EVAL_LEVEL:-person}"
-DAIC_EVAL_MODE="${DAIC_EVAL_MODE:-majority_vote}"
-DAIC_PERSON_THRESHOLD="${DAIC_PERSON_THRESHOLD:-0.5}"
+CMDC_FOLD="${CMDC_FOLD:-fold1}"
+DAIC_WOZ_EVAL_LEVEL="${DAIC_WOZ_EVAL_LEVEL:-${DAIC_EVAL_LEVEL:-person}}"
+DAIC_WOZ_EVAL_MODE="${DAIC_WOZ_EVAL_MODE:-${DAIC_EVAL_MODE:-majority_vote}}"
+DAIC_WOZ_PERSON_THRESHOLD="${DAIC_WOZ_PERSON_THRESHOLD:-${DAIC_PERSON_THRESHOLD:-0.5}}"
+EATD_EVAL_LEVEL="${EATD_EVAL_LEVEL:-person}"
+EATD_EVAL_MODE="${EATD_EVAL_MODE:-majority_vote}"
+EATD_PERSON_THRESHOLD="${EATD_PERSON_THRESHOLD:-0.5}"
+CMDC_EVAL_LEVEL="${CMDC_EVAL_LEVEL:-person}"
+CMDC_EVAL_MODE="${CMDC_EVAL_MODE:-majority_vote}"
+CMDC_PERSON_THRESHOLD="${CMDC_PERSON_THRESHOLD:-0.5}"
 
 BATCH_SIZE="${BATCH_SIZE:-1}"
 DEVICE="${DEVICE:-cuda:0}"
@@ -110,11 +120,11 @@ case "${MODEL_FAMILY}:${PROMPT_MODE}" in
 esac
 
 case "$DATASET_NAME" in
-    merged|daic_woz|eatd)
+    merged|daic_woz|eatd|cmdc)
         ;;
     *)
         echo "Unsupported DATASET_NAME: $DATASET_NAME"
-        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, or DATASET_NAME=eatd"
+        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, DATASET_NAME=eatd, or DATASET_NAME=cmdc"
         exit 1
         ;;
 esac
@@ -140,18 +150,26 @@ case "$DATASET_NAME" in
     merged)
         DATA_SPLIT_DEFAULT="val"
         DATA_BASENAME="merged"
+        DATA_SUBDIR="merged/$DATA_SPLIT_DEFAULT"
         ;;
     daic_woz)
         DATA_SPLIT_DEFAULT="val"
         DATA_BASENAME="daic_woz"
+        DATA_SUBDIR="daic_woz/$DATA_SPLIT_DEFAULT"
         ;;
     eatd)
         DATA_SPLIT_DEFAULT="test"
         DATA_BASENAME="eatd"
+        DATA_SUBDIR="eatd/$DATA_SPLIT_DEFAULT"
+        ;;
+    cmdc)
+        DATA_SPLIT_DEFAULT="test"
+        DATA_BASENAME="$CMDC_FOLD"
+        DATA_SUBDIR="cmdc/$CMDC_FOLD/$DATA_SPLIT_DEFAULT"
         ;;
 esac
 
-DATA_PATH="${DATA_PATH:-$LOCAL_DIR/data/$DATASET_NAME/$DATA_SPLIT_DEFAULT}"
+DATA_PATH="${DATA_PATH:-$LOCAL_DIR/data/$DATA_SUBDIR}"
 SCP_FILENAME="${SCP_FILENAME:-$DATA_BASENAME.scp}"
 TASK_FILENAME="${TASK_FILENAME:-${DATA_BASENAME}_multitask.jsonl}"
 PROMPT_FILE_DEFAULT="${DATA_BASENAME}_${PROMPT_FILE_SUFFIX}"
@@ -159,7 +177,7 @@ PROMPT_PATH="${PROMPT_PATH:-$DATA_PATH/$PROMPT_FILE_DEFAULT}"
 
 DAIC_LEVEL_SUFFIX=""
 if [[ "$DATASET_NAME" == "daic_woz" ]]; then
-    DAIC_LEVEL_SUFFIX="_${DAIC_EVAL_LEVEL}"
+    DAIC_LEVEL_SUFFIX="_${DAIC_WOZ_EVAL_LEVEL}"
 fi
 
 CHECKPOINT_NAME="$(sanitize_name "$(derive_checkpoint_name "$PEFT_PATH")")"
@@ -188,11 +206,18 @@ echo "============================================"
 echo "  Per-Dataset Evaluation"
 echo "============================================"
 echo "  DATASET_NAME    : $DATASET_NAME"
+echo "  CMDC_FOLD       : $CMDC_FOLD"
 echo "  MODEL_FAMILY    : $MODEL_FAMILY"
 echo "  PROMPT_MODE     : $PROMPT_MODE"
-echo "  DAIC_EVAL_LEVEL : $DAIC_EVAL_LEVEL"
-echo "  DAIC_EVAL_MODE  : $DAIC_EVAL_MODE"
-echo "  DAIC_THRESHOLD  : $DAIC_PERSON_THRESHOLD"
+echo "  DAIC_LEVEL      : $DAIC_WOZ_EVAL_LEVEL"
+echo "  DAIC_MODE       : $DAIC_WOZ_EVAL_MODE"
+echo "  DAIC_THRESHOLD  : $DAIC_WOZ_PERSON_THRESHOLD"
+echo "  EATD_LEVEL      : $EATD_EVAL_LEVEL"
+echo "  EATD_MODE       : $EATD_EVAL_MODE"
+echo "  EATD_THRESHOLD  : $EATD_PERSON_THRESHOLD"
+echo "  CMDC_LEVEL      : $CMDC_EVAL_LEVEL"
+echo "  CMDC_MODE       : $CMDC_EVAL_MODE"
+echo "  CMDC_THRESHOLD  : $CMDC_PERSON_THRESHOLD"
 echo "  CHECKPOINT_MODE : $CHECKPOINT_MODE"
 echo "  EVAL_SCRIPT     : $EVAL_SCRIPT"
 echo "  MODEL_PATH      : $MODEL_PATH"
@@ -216,9 +241,15 @@ CMD=(
     python "$EVAL_SCRIPT"
     --model_path "$MODEL_PATH"
     --dataset_name "$DATASET_NAME"
-    --daic_eval_level "$DAIC_EVAL_LEVEL"
-    --daic_eval_mode "$DAIC_EVAL_MODE"
-    --daic_person_threshold "$DAIC_PERSON_THRESHOLD"
+    --daic_woz_eval_level "$DAIC_WOZ_EVAL_LEVEL"
+    --daic_woz_eval_mode "$DAIC_WOZ_EVAL_MODE"
+    --daic_woz_person_threshold "$DAIC_WOZ_PERSON_THRESHOLD"
+    --eatd_eval_level "$EATD_EVAL_LEVEL"
+    --eatd_eval_mode "$EATD_EVAL_MODE"
+    --eatd_person_threshold "$EATD_PERSON_THRESHOLD"
+    --cmdc_eval_level "$CMDC_EVAL_LEVEL"
+    --cmdc_eval_mode "$CMDC_EVAL_MODE"
+    --cmdc_person_threshold "$CMDC_PERSON_THRESHOLD"
     --data_path "$DATA_PATH"
     --prompt_path "$PROMPT_PATH"
     --batch_size "$BATCH_SIZE"

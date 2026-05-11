@@ -27,9 +27,15 @@ export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
-export DAIC_EVAL_LEVEL="${DAIC_EVAL_LEVEL:-person}" # segment or person
-export DAIC_EVAL_MODE="${DAIC_EVAL_MODE:-majority_vote}" # majority_vote, mean_probability, or max_probability
-export DAIC_PERSON_THRESHOLD="${DAIC_PERSON_THRESHOLD:-0.5}"
+export DAIC_WOZ_EVAL_LEVEL="${DAIC_WOZ_EVAL_LEVEL:-${DAIC_EVAL_LEVEL:-person}}"
+export DAIC_WOZ_EVAL_MODE="${DAIC_WOZ_EVAL_MODE:-${DAIC_EVAL_MODE:-majority_vote}}"
+export DAIC_WOZ_PERSON_THRESHOLD="${DAIC_WOZ_PERSON_THRESHOLD:-${DAIC_PERSON_THRESHOLD:-0.5}}"
+export DAIC_EVAL_LEVEL="$DAIC_WOZ_EVAL_LEVEL"
+export DAIC_EVAL_MODE="$DAIC_WOZ_EVAL_MODE"
+export DAIC_PERSON_THRESHOLD="$DAIC_WOZ_PERSON_THRESHOLD"
+export EATD_EVAL_LEVEL="${EATD_EVAL_LEVEL:-person}"
+export EATD_EVAL_MODE="${EATD_EVAL_MODE:-majority_vote}"
+export EATD_PERSON_THRESHOLD="${EATD_PERSON_THRESHOLD:-0.5}"
 export ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
 export PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
 export PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
@@ -97,9 +103,11 @@ case "$DATASET_NAME" in
         ;;
 esac
 
-DAIC_LEVEL_SUFFIX=""
+DATASET_LEVEL_SUFFIX=""
 if [ "$DATASET_NAME" = "daic_woz" ]; then
-    DAIC_LEVEL_SUFFIX="_${DAIC_EVAL_LEVEL}"
+    DATASET_LEVEL_SUFFIX="_${DAIC_WOZ_EVAL_LEVEL}"
+elif [ "$DATASET_NAME" = "eatd" ]; then
+    DATASET_LEVEL_SUFFIX="_${EATD_EVAL_LEVEL}"
 fi
 
 case "$PROMPT_MODE" in
@@ -147,9 +155,9 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 export AUDIOLLM_ENABLE_GPU_LOG="${AUDIOLLM_ENABLE_GPU_LOG:-1}"
 export AUDIOLLM_GPU_LOG_INTERVAL_SEC="${AUDIOLLM_GPU_LOG_INTERVAL_SEC:-60}"
 
-export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/${LOG_DIR_NAME}${DAIC_LEVEL_SUFFIX}}"
-export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/${STORAGE_DIR_NAME}${DAIC_LEVEL_SUFFIX}}"
-export SAVE_PATH="${SAVE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/${OUTPUT_DIR_NAME}${DAIC_LEVEL_SUFFIX}/${PROMPT_MODE}}"
+export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/${LOG_DIR_NAME}${DATASET_LEVEL_SUFFIX}}"
+export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/${STORAGE_DIR_NAME}${DATASET_LEVEL_SUFFIX}}"
+export SAVE_PATH="${SAVE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/${OUTPUT_DIR_NAME}${DATASET_LEVEL_SUFFIX}/${PROMPT_MODE}}"
 
 mkdir -p "$LOG_DIR" "$STORAGE_PATH" "$SAVE_PATH"
 
@@ -159,7 +167,7 @@ exec > >(tee -a "$SLURM_STDOUT_FILE")
 exec 2> >(tee -a "$SLURM_STDERR_FILE" >&2)
 
 N_TRIALS="${N_TRIALS:-20}"
-STUDY_NAME="${STUDY_NAME:-${DATASET_NAME}${DAIC_LEVEL_SUFFIX}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME="${STUDY_NAME:-${DATASET_NAME}${DATASET_LEVEL_SUFFIX}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
 LOG_FILE="$LOG_DIR/${LOG_FILE_PREFIX}_${TIMESTAMP}.log"
@@ -179,9 +187,12 @@ echo "Dataset Name: $DATASET_NAME" | tee -a "$LOG_FILE"
 echo "Model Family: $MODEL_FAMILY" | tee -a "$LOG_FILE"
 echo "Prompt Mode: $PROMPT_MODE" | tee -a "$LOG_FILE"
 echo "Task Variant: $TASK_VARIANT" | tee -a "$LOG_FILE"
-echo "DAIC Eval Level: $DAIC_EVAL_LEVEL" | tee -a "$LOG_FILE"
-echo "DAIC Eval Mode: $DAIC_EVAL_MODE" | tee -a "$LOG_FILE"
-echo "DAIC Person Threshold: $DAIC_PERSON_THRESHOLD" | tee -a "$LOG_FILE"
+echo "DAIC Eval Level: $DAIC_WOZ_EVAL_LEVEL" | tee -a "$LOG_FILE"
+echo "DAIC Eval Mode: $DAIC_WOZ_EVAL_MODE" | tee -a "$LOG_FILE"
+echo "DAIC Person Threshold: $DAIC_WOZ_PERSON_THRESHOLD" | tee -a "$LOG_FILE"
+echo "EATD Eval Level: $EATD_EVAL_LEVEL" | tee -a "$LOG_FILE"
+echo "EATD Eval Mode: $EATD_EVAL_MODE" | tee -a "$LOG_FILE"
+echo "EATD Person Threshold: $EATD_PERSON_THRESHOLD" | tee -a "$LOG_FILE"
 echo "Launch Input Mode (derived): $LAUNCH_INPUT_MODE" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Train Data Path: $TRAIN_DATA_PATH" | tee -a "$LOG_FILE"
@@ -254,9 +265,12 @@ python optuna_hpo/hpo.py \
     --model-family "$MODEL_FAMILY" \
     --prompt-mode "$PROMPT_MODE" \
     --task-variant "$TASK_VARIANT" \
-    --daic-eval-level "$DAIC_EVAL_LEVEL" \
-    --daic-eval-mode "$DAIC_EVAL_MODE" \
-    --daic-person-threshold "$DAIC_PERSON_THRESHOLD" \
+    --daic-eval-level "$DAIC_WOZ_EVAL_LEVEL" \
+    --daic-eval-mode "$DAIC_WOZ_EVAL_MODE" \
+    --daic-person-threshold "$DAIC_WOZ_PERSON_THRESHOLD" \
+    --eatd-eval-level "$EATD_EVAL_LEVEL" \
+    --eatd-eval-mode "$EATD_EVAL_MODE" \
+    --eatd-person-threshold "$EATD_PERSON_THRESHOLD" \
     --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
     --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
     --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \

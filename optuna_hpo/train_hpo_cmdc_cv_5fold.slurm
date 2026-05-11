@@ -58,13 +58,16 @@ export CMDC_ROOT="${CMDC_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Au
 export NUM_GPUS="${NUM_GPUS:-4}"
 export FOLDS="${FOLDS:-fold1 fold2 fold3 fold4 fold5}"
 export STUDY_MODE="${STUDY_MODE:-cv_mean}" # per_fold or cv_mean
+export CMDC_EVAL_LEVEL="${CMDC_EVAL_LEVEL:-person}"
+export CMDC_EVAL_MODE="${CMDC_EVAL_MODE:-majority_vote}"
+export CMDC_PERSON_THRESHOLD="${CMDC_PERSON_THRESHOLD:-0.5}"
 export ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
 export PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
 export PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
 export PRUNER_INTERVAL_STEPS="${PRUNER_INTERVAL_STEPS:-1}"
-export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
-export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
-export SAVE_ROOT="${SAVE_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_cmdc_cv_5fold_${STUDY_MODE}}"
+export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}}"
+export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}}"
+export SAVE_ROOT="${SAVE_ROOT:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export AUDIOLLM_ENABLE_COLLATE_DEBUG="${AUDIOLLM_ENABLE_COLLATE_DEBUG:-0}"
 export AUDIOLLM_COLLATE_DEBUG_LIMIT="${AUDIOLLM_COLLATE_DEBUG_LIMIT:-6}"
@@ -88,7 +91,7 @@ exec 2> >(tee -a "$SLURM_STDERR_FILE" >&2)
 
 N_TRIALS="${N_TRIALS:-20}"
 TARGET_TOTAL_TRIALS="${TARGET_TOTAL_TRIALS:-}"
-STUDY_NAME="${STUDY_NAME:-cmdc_${MODEL_FAMILY}_${PROMPT_MODE}_${STUDY_MODE}_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME="${STUDY_NAME:-cmdc_${CMDC_EVAL_LEVEL}_${MODEL_FAMILY}_${PROMPT_MODE}_${STUDY_MODE}_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
 LOG_FILE="$LOG_DIR/optuna_cmdc_cv_5fold_${TIMESTAMP}.log"
@@ -100,6 +103,9 @@ echo "Timestamp: $TIMESTAMP" | tee -a "$LOG_FILE"
 echo "Job ID: $SLURM_JOB_ID" | tee -a "$LOG_FILE"
 echo "Number of CV Trials: $N_TRIALS" | tee -a "$LOG_FILE"
 echo "Enable Pruning: $ENABLE_PRUNING" | tee -a "$LOG_FILE"
+echo "CMDC Eval Level: $CMDC_EVAL_LEVEL" | tee -a "$LOG_FILE"
+echo "CMDC Eval Mode: $CMDC_EVAL_MODE" | tee -a "$LOG_FILE"
+echo "CMDC Person Threshold: $CMDC_PERSON_THRESHOLD" | tee -a "$LOG_FILE"
 echo "Pruner Startup Trials: $PRUNER_STARTUP_TRIALS" | tee -a "$LOG_FILE"
 echo "Pruner Warmup Steps: $PRUNER_WARMUP_STEPS" | tee -a "$LOG_FILE"
 echo "Pruner Interval Steps: $PRUNER_INTERVAL_STEPS" | tee -a "$LOG_FILE"
@@ -186,6 +192,9 @@ python optuna_hpo/hpo_cv_5fold.py \
     --model-family "$MODEL_FAMILY" \
     --prompt-mode "$PROMPT_MODE" \
     --study-mode "$STUDY_MODE" \
+    --cmdc-eval-level "$CMDC_EVAL_LEVEL" \
+    --cmdc-eval-mode "$CMDC_EVAL_MODE" \
+    --cmdc-person-threshold "$CMDC_PERSON_THRESHOLD" \
     --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
     --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
     --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
