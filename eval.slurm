@@ -26,7 +26,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 # Override via:
 # sbatch --export=PEFT_PATH=/path/to/checkpoint,DATASET_NAME=daic_woz,MODEL_FAMILY=audio,PROMPT_MODE=audiotext eval.slurm
-export PEFT_PATH="${PEFT_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_daic_woz_person_hpo/audiotext_trial_trial_001_lr4e-05_bs1_r8_a16/best_model}"
+export PEFT_PATH="${PEFT_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_daic_woz_hpo_person/audiotext_trial_trial_001_lr4e-05_bs1_r8_a16/best_model}"
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}"
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}"
 export DATASET_NAME="${DATASET_NAME:-merged}"
@@ -34,7 +34,7 @@ export DAIC_EVAL_LEVEL="${DAIC_EVAL_LEVEL:-person}"
 export DAIC_EVAL_MODE="${DAIC_EVAL_MODE:-majority_vote}"
 export DAIC_PERSON_THRESHOLD="${DAIC_PERSON_THRESHOLD:-0.5}"
 export CHECKPOINT_MODE="${CHECKPOINT_MODE:-auto}"
-export ADAPTER_PATH="${ADAPTER_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_daic_woz_person_hpo/audiotext_trial_trial_001_lr4e-05_bs1_r8_a16/best_model/audio_adapter_state.pt}"
+export ADAPTER_PATH="${ADAPTER_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/optuna_daic_woz_hpo_person/audiotext_trial_trial_001_lr4e-05_bs1_r8_a16/best_model/audio_adapter_state.pt}"
 
 DAIC_LEVEL_SUFFIX=""
 if [ "$DATASET_NAME" = "daic_woz" ]; then
