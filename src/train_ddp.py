@@ -108,7 +108,13 @@ def create_modified_qwen2audio_encoder(original_encoder, adapter_config):
 
 def save_audio_adapter_state(model, save_dir):
     adapter_state_path = os.path.join(save_dir, "audio_adapter_state.pt")
-    torch.save(model.audio_tower.audio_adapter.state_dict(), adapter_state_path)
+    adapter_state = {}
+    for key, value in model.audio_tower.audio_adapter.state_dict().items():
+        if ".lora_" in key:
+            continue
+        key = key.replace(".base_layer.", ".")
+        adapter_state[key] = value.detach().cpu()
+    torch.save(adapter_state, adapter_state_path)
     return adapter_state_path
 
 

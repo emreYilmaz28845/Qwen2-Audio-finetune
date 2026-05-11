@@ -195,6 +195,27 @@ def infer_default_adapter_path(peft_path):
     return candidates[0]
 
 
+def normalize_audio_adapter_state_dict(state):
+    normalized_state = {}
+    had_peft_wrapped_keys = False
+
+    for key, value in state.items():
+        if key.startswith("audio_adapter."):
+            key = key[len("audio_adapter."):]
+
+        if ".lora_" in key:
+            had_peft_wrapped_keys = True
+            continue
+
+        if ".base_layer." in key:
+            key = key.replace(".base_layer.", ".")
+            had_peft_wrapped_keys = True
+
+        normalized_state[key] = value
+
+    return normalized_state, had_peft_wrapped_keys
+
+
 def load_audio_adapter_state(model, adapter_path):
     if not os.path.isfile(adapter_path):
         raise FileNotFoundError(
@@ -210,14 +231,18 @@ def load_audio_adapter_state(model, adapter_path):
     if not isinstance(state, dict):
         raise RuntimeError(f"Adapter state at {adapter_path} is not a valid state dict.")
 
-    if any(key.startswith("audio_adapter.") for key in state):
-        state = {key[len("audio_adapter."):]: value for key, value in state.items()}
+    state, had_peft_wrapped_keys = normalize_audio_adapter_state_dict(state)
 
     missing, unexpected = model.audio_tower.audio_adapter.load_state_dict(state, strict=False)
     if missing or unexpected:
         raise RuntimeError(
             "Failed to load `audio_adapter` weights cleanly.\n"
             f"Missing keys: {missing}\nUnexpected keys: {unexpected}\nAdapter path: {adapter_path}"
+        )
+    if had_peft_wrapped_keys:
+        print(
+            "[Info] Loaded a PEFT-wrapped audio_adapter checkpoint by restoring only the base adapter "
+            "weights from `audio_adapter_state.pt`. LoRA weights will be loaded from the PEFT checkpoint."
         )
 
 

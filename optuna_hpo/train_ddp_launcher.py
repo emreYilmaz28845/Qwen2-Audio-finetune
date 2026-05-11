@@ -6,14 +6,27 @@ It reads the trial configuration from a JSON file.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
 
 # Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
-from config.config import Config
+
+def _load_repo_config_class():
+    config_path = os.path.join(PROJECT_ROOT, "config", "config.py")
+    spec = importlib.util.spec_from_file_location("audiollm_repo_config", config_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load Config from {config_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.Config
+
+
+Config = _load_repo_config_class()
 from optuna_hpo.train_ddp import train_ddp
 
 
