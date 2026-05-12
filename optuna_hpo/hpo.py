@@ -515,6 +515,7 @@ def run_optimization(
         "best_trial_number": best_trial.number if best_trial is not None else None,
         "best_f1": float(best_trial.value) if best_trial is not None else None,
         "best_params": dict(best_trial.params) if best_trial is not None else None,
+        "best_eval_summary": best_trial.user_attrs.get("best_eval_summary") if best_trial is not None else None,
         "all_trials": [],
     }
 
@@ -525,6 +526,7 @@ def run_optimization(
                 "f1": None if trial.value is None else float(trial.value),
                 "state": trial.state.name,
                 "params": dict(trial.params),
+                "best_eval_summary": trial.user_attrs.get("best_eval_summary"),
             }
         )
 

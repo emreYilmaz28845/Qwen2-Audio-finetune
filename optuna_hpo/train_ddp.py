@@ -35,6 +35,7 @@ from utils.grouped_eval import (
     build_grouped_eval_records,
     build_grouped_task_metadata,
     grouped_eval_enabled,
+    grouped_person_results_key,
     normalize_grouped_eval_level,
 )
 from utils.functions import (
@@ -370,6 +371,21 @@ def _primary_grouped_person_eval_dataset(cfg):
     return ""
 
 
+def _supplemental_grouped_person_eval_datasets(cfg):
+    dataset_name = getattr(cfg.data, "dataset_name", "")
+    if dataset_name != "merged":
+        return []
+    return [
+        grouped_dataset_name
+        for grouped_dataset_name in sorted(GROUPED_DATASET_NAMES)
+        if _grouped_eval_level(cfg, grouped_dataset_name) == "person"
+    ]
+
+
+def _needs_grouped_eval_metadata(cfg):
+    return bool(_primary_grouped_person_eval_dataset(cfg) or _supplemental_grouped_person_eval_datasets(cfg))
+
+
 def _is_grouped_person_eval(cfg):
     return bool(_primary_grouped_person_eval_dataset(cfg))
 
@@ -380,22 +396,72 @@ def _is_daic_person_eval(cfg):
     )
 
 
+def _serialize_eval_result(stats: dict, *, mode: str, threshold: float):
+    accuracy, precision, recall, f1, weighted_f1 = compute_metrics_from_stats(stats)
+    return {
+        "mode": mode,
+        "threshold": float(threshold),
+        "stats": {
+            key: (float(value) if isinstance(value, (int, float)) else value)
+            for key, value in stats.items()
+        },
+        "metrics": {
+            "accuracy": float(accuracy),
+            "precision": float(precision),
+            "recall": float(recall),
+            "f1": float(f1),
+            "weighted_f1": float(weighted_f1),
+        },
+    }
+
+
+def _build_best_eval_summary(cfg, eval_loss: float, primary_stats: dict, supplemental_stats_by_dataset: dict):
+    primary_dataset_name = _primary_grouped_person_eval_dataset(cfg)
+    primary_mode = _grouped_eval_mode(cfg, primary_dataset_name) if primary_dataset_name else "segment"
+    primary_threshold = _grouped_eval_threshold(cfg, primary_dataset_name) if primary_dataset_name else 0.5
+    summary = {
+        "dataset_name": getattr(cfg.data, "dataset_name", ""),
+        "eval_loss": float(eval_loss),
+        "primary_scope": primary_dataset_name or "overall_segment",
+        "primary": _serialize_eval_result(
+            primary_stats,
+            mode=primary_mode,
+            threshold=primary_threshold,
+        ),
+    }
+    if supplemental_stats_by_dataset:
+        summary["supplemental_grouped_eval"] = {
+            grouped_person_results_key(grouped_dataset_name): _serialize_eval_result(
+                stats,
+                mode=_grouped_eval_mode(cfg, grouped_dataset_name),
+                threshold=_grouped_eval_threshold(cfg, grouped_dataset_name),
+            )
+            for grouped_dataset_name, stats in sorted(supplemental_stats_by_dataset.items())
+        }
+    return summary
+
+
 def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
     eval_loss = 0.0
     eval_steps = 0
     global_stats = None
-    grouped_local_records = []
+    grouped_local_records = {dataset_name: [] for dataset_name in GROUPED_DATASET_NAMES}
     eval_bar = tqdm(eval_dataloader, desc="[Eval]") if rank == 0 else eval_dataloader
-    grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
-    run_grouped_person_eval = bool(grouped_dataset_name)
+    primary_grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
+    supplemental_grouped_datasets = _supplemental_grouped_person_eval_datasets(cfg)
+    run_primary_grouped_person_eval = bool(primary_grouped_dataset_name)
+    datasets_requiring_grouped_records = set(supplemental_grouped_datasets)
+    if primary_grouped_dataset_name:
+        datasets_requiring_grouped_records.add(primary_grouped_dataset_name)
+    collect_grouped_records = bool(datasets_requiring_grouped_records)
 
     model.eval()
     with torch.no_grad():
         for _, batch in enumerate(eval_bar):
-            dataset_names = batch.pop("dataset_names", None) if run_grouped_person_eval else None
-            segment_keys = batch.pop("segment_keys", None) if run_grouped_person_eval else None
-            group_ids = batch.pop("group_ids", None) if run_grouped_person_eval else None
-            target_texts = batch.pop("target_texts", None) if run_grouped_person_eval else None
+            dataset_names = batch.pop("dataset_names", None) if collect_grouped_records else None
+            segment_keys = batch.pop("segment_keys", None) if collect_grouped_records else None
+            group_ids = batch.pop("group_ids", None) if collect_grouped_records else None
+            target_texts = batch.pop("target_texts", None) if collect_grouped_records else None
             if hasattr(batch, "to"):
                 batch = batch.to(device)
             else:
@@ -404,27 +470,30 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 outputs = model(**batch)
                 loss = outputs.loss
-                if run_grouped_person_eval:
+                if collect_grouped_records:
                     batch_grouped_records = build_grouped_eval_records(
-                            metric_processor.tokenizer,
-                            outputs.logits,
-                            batch["labels"],
-                            dataset_names,
-                            segment_keys,
-                            group_ids,
-                            target_texts,
+                        metric_processor.tokenizer,
+                        outputs.logits,
+                        batch["labels"],
+                        dataset_names,
+                        segment_keys,
+                        group_ids,
+                        target_texts,
+                    )
+                    for grouped_dataset_name in datasets_requiring_grouped_records:
+                        grouped_local_records[grouped_dataset_name].extend(
+                            batch_grouped_records.get(grouped_dataset_name, [])
                         )
-                    grouped_local_records.extend(batch_grouped_records.get(grouped_dataset_name, []))
-                else:
+                if not run_primary_grouped_person_eval:
                     global_stats = compute_metrics_text_binary_accumulate(
                         metric_processor, outputs.logits, batch["labels"], global_stats
                     )
 
             eval_loss += loss.item()
             eval_steps += 1
-            if rank == 0 and run_grouped_person_eval:
+            if rank == 0 and run_primary_grouped_person_eval:
                 eval_bar.set_description(
-                    f"[Eval] loss {loss:.3f} | segments {len(grouped_local_records)}"
+                    f"[Eval] loss {loss:.3f} | segments {len(grouped_local_records[primary_grouped_dataset_name])}"
                 )
             elif rank == 0 and global_stats and global_stats["total"] > 0:
                 temp_acc, _, _, temp_f1, temp_wf1 = compute_metrics_from_stats(global_stats)
@@ -436,18 +505,29 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
     dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
     reduced_eval_loss = (loss_tensor[0] / loss_tensor[1]).item() if loss_tensor[1] > 0 else 0.0
 
-    if run_grouped_person_eval:
+    supplemental_stats_by_dataset = {}
+    primary_grouped_stats = None
+    if collect_grouped_records:
         gathered_records = [None for _ in range(dist.get_world_size())]
         dist.all_gather_object(gathered_records, grouped_local_records)
-        merged_records = []
+        merged_records_by_dataset = {dataset_name: [] for dataset_name in datasets_requiring_grouped_records}
         for record_group in gathered_records:
-            merged_records.extend(record_group or [])
-        reduced_stats = aggregate_group_predictions(
-            merged_records,
-            mode=_grouped_eval_mode(cfg, grouped_dataset_name),
-            threshold=_grouped_eval_threshold(cfg, grouped_dataset_name),
-        )
-        return reduced_eval_loss, reduced_stats
+            for grouped_dataset_name in datasets_requiring_grouped_records:
+                merged_records_by_dataset[grouped_dataset_name].extend((record_group or {}).get(grouped_dataset_name, []))
+
+        for grouped_dataset_name, merged_records in merged_records_by_dataset.items():
+            stats = aggregate_group_predictions(
+                merged_records,
+                mode=_grouped_eval_mode(cfg, grouped_dataset_name),
+                threshold=_grouped_eval_threshold(cfg, grouped_dataset_name),
+            )
+            if grouped_dataset_name == primary_grouped_dataset_name:
+                primary_grouped_stats = stats
+            elif grouped_dataset_name in supplemental_grouped_datasets:
+                supplemental_stats_by_dataset[grouped_dataset_name] = stats
+
+    if run_primary_grouped_person_eval:
+        return reduced_eval_loss, primary_grouped_stats, supplemental_stats_by_dataset
 
     stats_tensor = torch.tensor(
         [
@@ -470,7 +550,7 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
         "total": stats_tensor[4].item(),
         "correct": stats_tensor[5].item(),
     }
-    return reduced_eval_loss, reduced_stats
+    return reduced_eval_loss, reduced_stats, supplemental_stats_by_dataset
 
 
 def _finalize_run(logger, trial_name, best_f1, wandb_logger):
@@ -536,7 +616,7 @@ def train_textonly_ddp(cfg, trial_name=""):
         cfg.data.train_prompt_path,
         task_filename=cfg.data.train_task_filename,
     )
-    if _is_grouped_person_eval(cfg):
+    if _needs_grouped_eval_metadata(cfg):
         eval_dataset = TextOnlyEvalDatasetWithMeta(
             cfg.data.eval_data_path,
             cfg.data.val_prompt_path,
@@ -643,7 +723,7 @@ def train_textonly_ddp(cfg, trial_name=""):
                 )
 
             if (train_step + 1) % dynamic_eval_step == 0:
-                eval_loss, reduced_stats = _evaluate(
+                eval_loss, reduced_stats, supplemental_stats_by_dataset = _evaluate(
                     model, eval_dataloader, device, metric_processor, rank, cfg
                 )
                 if rank == 0:
@@ -672,9 +752,30 @@ def train_textonly_ddp(cfg, trial_name=""):
                             _grouped_eval_mode(cfg, grouped_dataset_name),
                             _grouped_eval_threshold(cfg, grouped_dataset_name),
                         )
+                    for supplemental_dataset_name, supplemental_stats in supplemental_stats_by_dataset.items():
+                        sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
+                        logger.info(
+                            "  Supplemental %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
+                            supplemental_dataset_name,
+                            sup_acc,
+                            sup_prec,
+                            sup_rec,
+                            sup_f1,
+                            sup_wf1,
+                            supplemental_stats.get("num_participants", 0),
+                            supplemental_stats.get("num_segments", 0),
+                            _grouped_eval_mode(cfg, supplemental_dataset_name),
+                            _grouped_eval_threshold(cfg, supplemental_dataset_name),
+                        )
 
                     if eval_f1 > best_f1:
                         best_f1 = eval_f1
+                        cfg.env.best_eval_summary = _build_best_eval_summary(
+                            cfg,
+                            eval_loss,
+                            reduced_stats,
+                            supplemental_stats_by_dataset,
+                        )
                         logger.info("[New Best F1] %.4f", eval_f1)
                         best_model_path = os.path.join(cfg.env.save_path, "best_model")
                         os.makedirs(best_model_path, exist_ok=True)
@@ -689,6 +790,12 @@ def train_textonly_ddp(cfg, trial_name=""):
                                     "eval/f1": eval_f1,
                                     "eval/best_f1": best_f1,
                                     "train/epoch": epoch,
+                                    **{
+                                        f"eval/{grouped_person_results_key(supplemental_dataset_name)}/f1": float(
+                                            compute_metrics_from_stats(supplemental_stats)[3]
+                                        )
+                                        for supplemental_dataset_name, supplemental_stats in supplemental_stats_by_dataset.items()
+                                    },
                                 },
                                 step=global_train_step,
                             )
@@ -749,7 +856,7 @@ def train_audiotext_ddp(cfg, trial_name=""):
         scp_filename=cfg.data.train_scp_filename,
         task_filename=cfg.data.train_task_filename,
     )
-    if _is_grouped_person_eval(cfg):
+    if _needs_grouped_eval_metadata(cfg):
         eval_dataset = AudioEvalDatasetWithMeta(
             cfg.data.eval_data_path,
             cfg.data.val_prompt_path,
@@ -875,7 +982,9 @@ def train_audiotext_ddp(cfg, trial_name=""):
                 )
 
             if (train_step + 1) % dynamic_eval_step == 0:
-                eval_loss, reduced_stats = _evaluate(model, eval_dataloader, device, processor, rank, cfg)
+                eval_loss, reduced_stats, supplemental_stats_by_dataset = _evaluate(
+                    model, eval_dataloader, device, processor, rank, cfg
+                )
                 if rank == 0:
                     eval_step_idx += 1
                     eval_accuracy, eval_precision, eval_recall, eval_f1, eval_wf1 = compute_metrics_from_stats(
@@ -902,9 +1011,30 @@ def train_audiotext_ddp(cfg, trial_name=""):
                             _grouped_eval_mode(cfg, grouped_dataset_name),
                             _grouped_eval_threshold(cfg, grouped_dataset_name),
                         )
+                    for supplemental_dataset_name, supplemental_stats in supplemental_stats_by_dataset.items():
+                        sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
+                        logger.info(
+                            "  Supplemental %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
+                            supplemental_dataset_name,
+                            sup_acc,
+                            sup_prec,
+                            sup_rec,
+                            sup_f1,
+                            sup_wf1,
+                            supplemental_stats.get("num_participants", 0),
+                            supplemental_stats.get("num_segments", 0),
+                            _grouped_eval_mode(cfg, supplemental_dataset_name),
+                            _grouped_eval_threshold(cfg, supplemental_dataset_name),
+                        )
 
                     if eval_f1 > best_f1:
                         best_f1 = eval_f1
+                        cfg.env.best_eval_summary = _build_best_eval_summary(
+                            cfg,
+                            eval_loss,
+                            reduced_stats,
+                            supplemental_stats_by_dataset,
+                        )
                         logger.info("[New Best F1] %.4f", eval_f1)
                         best_model_path = os.path.join(cfg.env.save_path, "best_model")
                         os.makedirs(best_model_path, exist_ok=True)
@@ -921,6 +1051,12 @@ def train_audiotext_ddp(cfg, trial_name=""):
                                     "eval/f1": eval_f1,
                                     "eval/best_f1": best_f1,
                                     "train/epoch": epoch,
+                                    **{
+                                        f"eval/{grouped_person_results_key(supplemental_dataset_name)}/f1": float(
+                                            compute_metrics_from_stats(supplemental_stats)[3]
+                                        )
+                                        for supplemental_dataset_name, supplemental_stats in supplemental_stats_by_dataset.items()
+                                    },
                                 },
                                 step=global_train_step,
                             )

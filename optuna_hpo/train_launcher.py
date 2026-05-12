@@ -192,6 +192,10 @@ def launch_ddp_training(
             with open(result_file, "r", encoding="utf-8") as handle:
                 results = json.load(handle)
             best_f1 = results.get("best_f1", -1.0)
+            if trial is not None:
+                best_eval_summary = results.get("best_eval_summary")
+                if best_eval_summary is not None:
+                    trial.set_user_attr("best_eval_summary", best_eval_summary)
         else:
             print(f"Warning: Result file not found at {result_file}")
             best_f1 = -1.0

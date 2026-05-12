@@ -136,6 +136,73 @@ def test_apply_person_level_results_adds_supplemental_merged_rows_for_eatd_and_c
     assert supplemental_results[grouped_person_results_key("cmdc")]["total"] == 1
 
 
+def test_apply_person_level_results_adds_supplemental_merged_rows_for_daic_only():
+    per_dataset_stats = {
+        "daic_woz": {"tp": 2, "fp": 1, "fn": 0, "tn": 1, "total": 4, "correct": 3},
+    }
+    overall_stats = {"tp": 2, "fp": 1, "fn": 0, "tn": 1, "total": 4, "correct": 3}
+    grouped_records_by_dataset = {
+        "daic_woz": [
+            {"key": "335_segment_1", "group_id": "335", "target_text": "抑郁", "depressed_probability": 0.90},
+            {"key": "335_segment_2", "group_id": "335", "target_text": "抑郁", "depressed_probability": 0.85},
+            {"key": "302_segment_1", "group_id": "302", "target_text": "非抑郁", "depressed_probability": 0.10},
+        ]
+    }
+
+    next_per_dataset_stats, next_overall_stats, supplemental_results = apply_person_level_results(
+        dataset_name="merged",
+        level_by_dataset={"daic_woz": "person", "eatd": "segment", "cmdc": "segment"},
+        mode_by_dataset={"daic_woz": "mean_probability"},
+        threshold_by_dataset={"daic_woz": 0.5},
+        per_dataset_stats=per_dataset_stats,
+        overall_stats=overall_stats,
+        grouped_records_by_dataset=grouped_records_by_dataset,
+    )
+
+    assert next_per_dataset_stats == per_dataset_stats
+    assert next_overall_stats == overall_stats
+    assert supplemental_results[grouped_person_results_key("daic_woz")]["total"] == 2
+
+
+def test_apply_person_level_results_supports_mixed_merged_grouped_datasets():
+    grouped_records_by_dataset = {
+        "daic_woz": [
+            {"key": "335_segment_1", "group_id": "335", "target_text": "抑郁", "depressed_probability": 0.90},
+            {"key": "335_segment_2", "group_id": "335", "target_text": "抑郁", "depressed_probability": 0.80},
+        ],
+        "eatd": [
+            {"key": "104_negative", "group_id": "104", "target_text": "抑郁", "depressed_probability": 0.70},
+            {"key": "104_neutral", "group_id": "104", "target_text": "抑郁", "depressed_probability": 0.80},
+            {"key": "104_positive", "group_id": "104", "target_text": "抑郁", "depressed_probability": 0.90},
+        ],
+        "cmdc": [
+            {"key": "HC41_Q1", "group_id": "HC41", "target_text": "非抑郁", "depressed_probability": 0.10},
+            {"key": "HC41_Q2", "group_id": "HC41", "target_text": "非抑郁", "depressed_probability": 0.20},
+        ],
+    }
+
+    _, next_overall_stats, supplemental_results = apply_person_level_results(
+        dataset_name="merged",
+        level_by_dataset={"daic_woz": "person", "eatd": "person", "cmdc": "person"},
+        mode_by_dataset={
+            "daic_woz": "majority_vote",
+            "eatd": "mean_probability",
+            "cmdc": "max_probability",
+        },
+        threshold_by_dataset={"daic_woz": 0.5, "eatd": 0.5, "cmdc": 0.5},
+        per_dataset_stats={},
+        overall_stats=make_binary_stats(),
+        grouped_records_by_dataset=grouped_records_by_dataset,
+    )
+
+    assert next_overall_stats["total"] == 0
+    assert sorted(supplemental_results.keys()) == [
+        grouped_person_results_key("cmdc"),
+        grouped_person_results_key("daic_woz"),
+        grouped_person_results_key("eatd"),
+    ]
+
+
 def test_build_grouped_eval_records_match_for_audio_and_text_paths():
     tokenizer = DummyTokenizer()
     logits, labels = _build_logits_and_labels()

@@ -136,6 +136,7 @@ def main():
             "trial_params": trial_params,
             "input_mode": input_mode,
             "dataset_name": dataset_name,
+            "best_eval_summary": getattr(cfg.env, "best_eval_summary", None),
             "grouped_eval": {
                 grouped_dataset_name: {
                     "level": grouped_cfg[grouped_dataset_name][0],
