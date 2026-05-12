@@ -14,6 +14,7 @@ Supported user-facing mode combinations:
 Each trial runs a DDP training job and returns the best validation F1 score.
 """
 
+import argparse
 import json
 import logging
 import os
