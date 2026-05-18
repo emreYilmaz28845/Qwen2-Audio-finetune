@@ -2,7 +2,7 @@
 # ============================================================
 # Per-Dataset Evaluation Script (MN5 cluster)
 # ============================================================
-# Evaluates a saved model on the merged validation set,
+# Evaluates a saved model on the requested held-out test split by default,
 # reporting separate metrics for DAIC-WOZ, EATD, and CMDC.
 #
 # Usage:
@@ -14,7 +14,10 @@
 #   CHECKPOINT_MODE=auto|full_audio
 #   ADAPTER_PATH=/path/to/audio_adapter_state.pt
 #   DATASET_NAME=merged|daic_woz|eatd|cmdc
-#   CMDC_FOLD=fold1
+#   DATA_SPLIT=test
+#   ALLOW_NON_TEST_EVAL=1
+#   SKIP_SPLIT_VALIDATION=1
+#   CMDC_FOLD=fold1             # legacy only; clean holdout uses data/cmdc/$DATA_SPLIT
 #   DAIC_WOZ_EVAL_LEVEL=person|segment
 #   EATD_EVAL_LEVEL=person|segment
 #   CMDC_EVAL_LEVEL=person|segment
@@ -35,6 +38,7 @@ MODEL_FAMILY="${MODEL_FAMILY:-audio}"
 CHECKPOINT_MODE="${CHECKPOINT_MODE:-auto}"
 ADAPTER_PATH="${ADAPTER_PATH:-}"
 DATASET_NAME="${DATASET_NAME:-merged}"
+DATA_SPLIT="${DATA_SPLIT:-test}"
 CMDC_FOLD="${CMDC_FOLD:-fold1}"
 DAIC_WOZ_EVAL_LEVEL="${DAIC_WOZ_EVAL_LEVEL:-${DAIC_EVAL_LEVEL:-person}}"
 DAIC_WOZ_EVAL_MODE="${DAIC_WOZ_EVAL_MODE:-${DAIC_EVAL_MODE:-majority_vote}}"
@@ -48,6 +52,29 @@ CMDC_PERSON_THRESHOLD="${CMDC_PERSON_THRESHOLD:-0.5}"
 
 BATCH_SIZE="${BATCH_SIZE:-1}"
 DEVICE="${DEVICE:-cuda:0}"
+
+case "${DATA_SPLIT}" in
+    train|val|test)
+        ;;
+    *)
+        echo "Unsupported DATA_SPLIT: $DATA_SPLIT"
+        echo "Use DATA_SPLIT=train, DATA_SPLIT=val, or DATA_SPLIT=test"
+        exit 1
+        ;;
+esac
+
+if [[ "$DATA_SPLIT" != "test" ]]; then
+    case "${ALLOW_NON_TEST_EVAL:-0}" in
+        1|true|TRUE|yes|YES|on|ON)
+            echo "[Warning] Running evaluation on DATA_SPLIT=$DATA_SPLIT because ALLOW_NON_TEST_EVAL is enabled."
+            ;;
+        *)
+            echo "Refusing final evaluation on DATA_SPLIT=$DATA_SPLIT."
+            echo "Final reporting must use DATA_SPLIT=test. Set ALLOW_NON_TEST_EVAL=1 only for debugging."
+            exit 1
+            ;;
+    esac
+fi
 
 normalize_model_family() {
     local raw="$1"
@@ -148,24 +175,20 @@ esac
 
 case "$DATASET_NAME" in
     merged)
-        DATA_SPLIT_DEFAULT="val"
         DATA_BASENAME="merged"
-        DATA_SUBDIR="merged/$DATA_SPLIT_DEFAULT"
+        DATA_SUBDIR="merged/$DATA_SPLIT"
         ;;
     daic_woz)
-        DATA_SPLIT_DEFAULT="val"
         DATA_BASENAME="daic_woz"
-        DATA_SUBDIR="daic_woz/$DATA_SPLIT_DEFAULT"
+        DATA_SUBDIR="daic_woz/$DATA_SPLIT"
         ;;
     eatd)
-        DATA_SPLIT_DEFAULT="test"
         DATA_BASENAME="eatd"
-        DATA_SUBDIR="eatd/$DATA_SPLIT_DEFAULT"
+        DATA_SUBDIR="eatd/$DATA_SPLIT"
         ;;
     cmdc)
-        DATA_SPLIT_DEFAULT="test"
-        DATA_BASENAME="$CMDC_FOLD"
-        DATA_SUBDIR="cmdc/$CMDC_FOLD/$DATA_SPLIT_DEFAULT"
+        DATA_BASENAME="cmdc"
+        DATA_SUBDIR="cmdc/$DATA_SPLIT"
         ;;
 esac
 
@@ -202,10 +225,15 @@ OUTPUT_JSON="${OUTPUT_JSON:-$RESULTS_DIR/${EVAL_NAME_RESOLVED}_results.json}"
 
 mkdir -p "$LOG_DIR" "$RESULTS_DIR"
 
+if [[ "${SKIP_SPLIT_VALIDATION:-0}" != "1" ]]; then
+    python tools/validate_splits.py --dataset "$DATASET_NAME" --strict
+fi
+
 echo "============================================"
 echo "  Per-Dataset Evaluation"
 echo "============================================"
 echo "  DATASET_NAME    : $DATASET_NAME"
+echo "  DATA_SPLIT      : $DATA_SPLIT"
 echo "  CMDC_FOLD       : $CMDC_FOLD"
 echo "  MODEL_FAMILY    : $MODEL_FAMILY"
 echo "  PROMPT_MODE     : $PROMPT_MODE"
@@ -252,6 +280,7 @@ CMD=(
     --cmdc_person_threshold "$CMDC_PERSON_THRESHOLD"
     --data_path "$DATA_PATH"
     --prompt_path "$PROMPT_PATH"
+    --data_split "$DATA_SPLIT"
     --batch_size "$BATCH_SIZE"
     --device "$DEVICE"
     --output_json "$OUTPUT_JSON"

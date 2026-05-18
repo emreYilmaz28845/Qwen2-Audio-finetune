@@ -10,9 +10,11 @@ Old language-model-only audio checkpoints are intentionally unsupported here.
 """
 
 import argparse
+import hashlib
 import json
 import os
 from functools import partial
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -175,6 +177,17 @@ def format_result_entry(stats):
     return {**format_metrics(stats), **stats}
 
 
+def optional_split_audit_hash(data_path: str):
+    audit_path = Path(data_path).resolve().parent / "split_audit.json"
+    if not audit_path.exists():
+        return {"path": str(audit_path), "sha256": ""}
+    digest = hashlib.sha256()
+    with audit_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {"path": str(audit_path), "sha256": digest.hexdigest()}
+
+
 def print_metrics_row(name, stats):
     metrics = format_metrics(stats)
     print(
@@ -322,6 +335,7 @@ def main():
     parser.add_argument("--scp_filename", type=str, default="merged.scp")
     parser.add_argument("--task_filename", type=str, default="merged_multitask.jsonl")
     parser.add_argument("--dataset_name", type=str, default="merged")
+    parser.add_argument("--data_split", type=str, default="test")
     parser.add_argument("--daic_woz_eval_level", type=str, default="person",
                         choices=sorted(SUPPORTED_GROUPED_EVAL_LEVELS))
     parser.add_argument("--daic_woz_eval_mode", type=str, default="majority_vote",
@@ -423,8 +437,8 @@ def main():
     print(f"   Total samples: {len(eval_dataset)}")
 
     print("\n[Eval] Running full-audio evaluation...\n")
-    per_dataset_stats = {}
-    overall_stats = make_binary_stats()
+    segment_per_dataset_stats = {}
+    segment_overall_stats = make_binary_stats()
     grouped_records_by_dataset = {dataset: [] for dataset in GROUPED_DATASET_NAMES}
     eval_loss_sum = 0.0
     eval_steps = 0
@@ -448,15 +462,14 @@ def main():
             eval_loss_sum += loss.item()
             eval_steps += 1
 
-            if not use_person_as_primary:
-                accumulate_segment_stats_per_dataset(
-                    processor,
-                    outputs.logits,
-                    batch["labels"],
-                    dataset_names,
-                    per_dataset_stats,
-                    overall_stats,
-                )
+            accumulate_segment_stats_per_dataset(
+                processor,
+                outputs.logits,
+                batch["labels"],
+                dataset_names,
+                segment_per_dataset_stats,
+                segment_overall_stats,
+            )
 
             batch_grouped_records = build_grouped_eval_records(
                 processor.tokenizer,
@@ -471,6 +484,10 @@ def main():
                 grouped_records_by_dataset[grouped_dataset_name].extend(grouped_records)
 
     avg_loss = eval_loss_sum / eval_steps if eval_steps > 0 else 0.0
+    per_dataset_stats = {} if use_person_as_primary else {
+        name: dict(stats) for name, stats in segment_per_dataset_stats.items()
+    }
+    overall_stats = make_binary_stats() if use_person_as_primary else dict(segment_overall_stats)
     per_dataset_stats, overall_stats, supplemental_results = apply_person_level_results(
         dataset_name=dataset_name,
         level_by_dataset=level_by_dataset,
@@ -494,10 +511,13 @@ def main():
             "adapter_path": resolved_adapter_path,
             "checkpoint_mode": checkpoint_mode,
             "data_path": args.data_path,
+            "data_split": args.data_split,
+            "split_audit": optional_split_audit_hash(args.data_path),
             "prompt_path": args.prompt_path,
             "scp_filename": args.scp_filename,
             "task_filename": args.task_filename,
             "dataset_name": dataset_name,
+            "primary_level": "person" if use_person_as_primary else "segment",
             "grouped_eval_levels": level_by_dataset,
             "grouped_eval_modes": mode_by_dataset,
             "grouped_person_thresholds": threshold_by_dataset,
@@ -505,6 +525,13 @@ def main():
             "device": args.device,
             "avg_loss": avg_loss,
         }
+    }
+    results["_segment_eval"] = {
+        "per_dataset": {
+            ds_name: format_result_entry(stats)
+            for ds_name, stats in sorted(segment_per_dataset_stats.items())
+        },
+        "overall": format_result_entry(segment_overall_stats),
     }
     for ds_name in sorted(per_dataset_stats.keys()):
         stats = per_dataset_stats[ds_name]
@@ -545,6 +572,15 @@ def main():
         print_confusion_row(ds_name, supplemental_results[ds_name])
     print("-" * 50)
     print_confusion_row("OVERALL", overall_stats)
+
+    if use_person_as_primary:
+        print("\nSegment-Level Diagnostics:")
+        print(f"{'Dataset':<15} {'Samples':>8} {'Acc':>8} {'Prec':>8} {'Recall':>8} {'F1':>8} {'wF1':>8}")
+        print("-" * 90)
+        for ds_name in sorted(segment_per_dataset_stats.keys()):
+            print_metrics_row(ds_name, segment_per_dataset_stats[ds_name])
+        print("-" * 90)
+        print_metrics_row("SEG_OVERALL", segment_overall_stats)
 
     output_json = (args.output_json or "").strip()
     if not output_json:

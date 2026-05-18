@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")" || exit 1
 cd .. || exit 1
 
-DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
+DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd, cmdc
 MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
@@ -15,6 +15,9 @@ DAIC_WOZ_PERSON_THRESHOLD="${DAIC_WOZ_PERSON_THRESHOLD:-${DAIC_PERSON_THRESHOLD:
 EATD_EVAL_LEVEL="${EATD_EVAL_LEVEL:-person}"
 EATD_EVAL_MODE="${EATD_EVAL_MODE:-majority_vote}"
 EATD_PERSON_THRESHOLD="${EATD_PERSON_THRESHOLD:-0.5}"
+CMDC_EVAL_LEVEL="${CMDC_EVAL_LEVEL:-person}"
+CMDC_EVAL_MODE="${CMDC_EVAL_MODE:-majority_vote}"
+CMDC_PERSON_THRESHOLD="${CMDC_PERSON_THRESHOLD:-0.5}"
 ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
 PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
 PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
@@ -31,11 +34,11 @@ case "${MODEL_FAMILY}:${PROMPT_MODE}" in
 esac
 
 case "$DATASET_NAME" in
-    merged|daic_woz|eatd)
+    merged|daic_woz|eatd|cmdc)
         ;;
     *)
         echo "Unsupported DATASET_NAME: $DATASET_NAME"
-        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, or DATASET_NAME=eatd"
+        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, DATASET_NAME=eatd, or DATASET_NAME=cmdc"
         exit 1
         ;;
 esac
@@ -45,6 +48,8 @@ if [ "$DATASET_NAME" = "daic_woz" ]; then
     DATASET_LEVEL_SUFFIX="_${DAIC_WOZ_EVAL_LEVEL}"
 elif [ "$DATASET_NAME" = "eatd" ]; then
     DATASET_LEVEL_SUFFIX="_${EATD_EVAL_LEVEL}"
+elif [ "$DATASET_NAME" = "cmdc" ]; then
+    DATASET_LEVEL_SUFFIX="_${CMDC_EVAL_LEVEL}"
 fi
 
 N_TRIALS=${1:-20}
@@ -73,6 +78,9 @@ echo "DAIC Person Threshold: $DAIC_WOZ_PERSON_THRESHOLD"
 echo "EATD Eval Level: $EATD_EVAL_LEVEL"
 echo "EATD Eval Mode: $EATD_EVAL_MODE"
 echo "EATD Person Threshold: $EATD_PERSON_THRESHOLD"
+echo "CMDC Eval Level: $CMDC_EVAL_LEVEL"
+echo "CMDC Eval Mode: $CMDC_EVAL_MODE"
+echo "CMDC Person Threshold: $CMDC_PERSON_THRESHOLD"
 echo "Number of Trials: $N_TRIALS"
 echo "Enable Pruning: $ENABLE_PRUNING"
 echo "Pruner Startup Trials: $PRUNER_STARTUP_TRIALS"
@@ -101,6 +109,9 @@ if [ -d "/gpfs/projects/etur92" ]; then
     EATD_EVAL_LEVEL="$EATD_EVAL_LEVEL" \
     EATD_EVAL_MODE="$EATD_EVAL_MODE" \
     EATD_PERSON_THRESHOLD="$EATD_PERSON_THRESHOLD" \
+    CMDC_EVAL_LEVEL="$CMDC_EVAL_LEVEL" \
+    CMDC_EVAL_MODE="$CMDC_EVAL_MODE" \
+    CMDC_PERSON_THRESHOLD="$CMDC_PERSON_THRESHOLD" \
     N_TRIALS="$N_TRIALS" \
     ENABLE_PRUNING="$ENABLE_PRUNING" \
     PRUNER_STARTUP_TRIALS="$PRUNER_STARTUP_TRIALS" \
@@ -119,6 +130,10 @@ else
 
     mkdir -p "$LOG_DIR" "$SAVE_PATH" "$STORAGE_PATH"
 
+    if [[ "${SKIP_SPLIT_VALIDATION:-0}" != "1" ]]; then
+        python tools/validate_splits.py --dataset "$DATASET_NAME" --strict
+    fi
+
     python optuna_hpo/hpo.py \
         --n-trials "$N_TRIALS" \
         --study-name "$STUDY_NAME" \
@@ -134,6 +149,9 @@ else
         --eatd-eval-level "$EATD_EVAL_LEVEL" \
         --eatd-eval-mode "$EATD_EVAL_MODE" \
         --eatd-person-threshold "$EATD_PERSON_THRESHOLD" \
+        --cmdc-eval-level "$CMDC_EVAL_LEVEL" \
+        --cmdc-eval-mode "$CMDC_EVAL_MODE" \
+        --cmdc-person-threshold "$CMDC_PERSON_THRESHOLD" \
         --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
         --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
         --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \

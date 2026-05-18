@@ -95,12 +95,12 @@ def main():
         else "merged_multiprompt.jsonl"
     )
     train_prompt_file = os.environ.get("TRAIN_PROMPT_FILE", default_prompt_file)
-    eval_prompt_file = os.environ.get("EVAL_PROMPT_FILE", default_prompt_file)
+    eval_prompt_file = os.environ.get("VAL_PROMPT_FILE", os.environ.get("EVAL_PROMPT_FILE", default_prompt_file))
     train_task_file = os.environ.get("TRAIN_TASK_FILE", "merged_multitask.jsonl")
-    eval_task_file = os.environ.get("EVAL_TASK_FILE", "merged_multitask.jsonl")
+    eval_task_file = os.environ.get("VAL_TASK_FILE", os.environ.get("EVAL_TASK_FILE", "merged_multitask.jsonl"))
     default_scp_file = os.environ.get("SCP_FILE_DEFAULT", "merged.scp")
     train_scp_file = os.environ.get("TRAIN_SCP_FILE", default_scp_file)
-    eval_scp_file = os.environ.get("EVAL_SCP_FILE", default_scp_file)
+    eval_scp_file = os.environ.get("VAL_SCP_FILE", os.environ.get("EVAL_SCP_FILE", default_scp_file))
     wav_type = os.environ.get("WAV_TYPE", "wav")
 
     cfg.data.train_prompt_path = os.path.join(train_data_path, train_prompt_file)

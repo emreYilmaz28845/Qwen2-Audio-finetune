@@ -1,0 +1,58 @@
+{
+  "dataset_name": "merged",
+  "source_datasets": [
+    "cmdc",
+    "daic_woz",
+    "eatd"
+  ],
+  "segments_by_split": {
+    "train": 2134,
+    "val": 447,
+    "test": 458
+  },
+  "labels_by_split": {
+    "train": {
+      "非抑郁": 1407,
+      "抑郁": 727
+    },
+    "val": {
+      "非抑郁": 301,
+      "抑郁": 146
+    },
+    "test": {
+      "非抑郁": 306,
+      "抑郁": 152
+    }
+  },
+  "by_source_dataset": {
+    "train": {
+      "cmdc": 645,
+      "daic_woz": 1150,
+      "eatd": 339
+    },
+    "val": {
+      "cmdc": 135,
+      "daic_woz": 240,
+      "eatd": 72
+    },
+    "test": {
+      "cmdc": 143,
+      "daic_woz": 240,
+      "eatd": 75
+    }
+  },
+  "output_hashes": {
+    "train": {
+      "scp": "cb65acc1e3825debf2885dc91f8751a7c5278854c2492d46c325a10f1224cb61",
+      "multitask": "c2fdac420014e13637ad6bf3b09f12bd9fb5b2120bcc91afe32439f837194647"
+    },
+    "val": {
+      "scp": "0c0769901eec7effc8e9d056e8a8323e2d913a08db4b40930599107677ed307e",
+      "multitask": "27e39c137c56f129c2c2eb7f4e4e55b86853da40b37e0c851502176758d323e0"
+    },
+    "test": {
+      "scp": "ccc48a7ab219515bda309714bb20a4a26b46b3ac3d840617ab5eb68f44d60ac8",
+      "multitask": "c98f138de66c58e3b7bc6491338dd8cad83e4f0c8317cce1e945b757cd68acca"
+    }
+  }
+}

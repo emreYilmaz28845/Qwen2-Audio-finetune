@@ -95,7 +95,9 @@ def build_grouped_task_metadata(task: dict, default_dataset_name: str = "unknown
     group_id = None
     if grouped_eval_enabled(dataset_name):
         segment_key = source_key
-        group_id = extract_group_id(dataset_name, segment_key)
+        group_id = task.get("group_id") or task.get("participant_id")
+        if group_id is None:
+            group_id = extract_group_id(dataset_name, segment_key)
 
     return {
         "dataset_name": dataset_name,

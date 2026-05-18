@@ -1,0 +1,60 @@
+{
+  "dataset_name": "daic_woz",
+  "seed": 42,
+  "source_cache": "/home/emre/Projects/AudioLLM/Qwen2-Audio-finetune/data/source_manifests/clean_holdout/daic_woz_source_records.jsonl",
+  "note": "Clean train/val/test is derived from the labeled DAIC-WOZ train+dev participants because official test labels/audio are not available in this repo.",
+  "total_segments": 1630,
+  "total_participants": 142,
+  "segments_by_split": {
+    "train": 1150,
+    "val": 240,
+    "test": 240
+  },
+  "participants_by_split": {
+    "train": 100,
+    "val": 21,
+    "test": 21
+  },
+  "labels_by_split": {
+    "train": {
+      "非抑郁": 700,
+      "抑郁": 450
+    },
+    "val": {
+      "非抑郁": 150,
+      "抑郁": 90
+    },
+    "test": {
+      "非抑郁": 150,
+      "抑郁": 90
+    }
+  },
+  "participant_labels_by_split": {
+    "train": {
+      "非抑郁": 70,
+      "抑郁": 30
+    },
+    "val": {
+      "非抑郁": 15,
+      "抑郁": 6
+    },
+    "test": {
+      "非抑郁": 15,
+      "抑郁": 6
+    }
+  },
+  "output_hashes": {
+    "train": {
+      "scp": "d09b8915936a0aa128b2d06616911afc4e365f14f11aeae8826d612d66db0d1b",
+      "multitask": "6d826bad3a31a9f7824881cacae9669d849dfbe10be1c4b14819e7e194f83fbd"
+    },
+    "val": {
+      "scp": "3894ef4533ea2077a9daf276fd536e92bf6af9d64a8cc7747146080a745293bd",
+      "multitask": "7060f59e63cc04c2aa2811473741090967d6818f7b9ef5b1ec66cc9a549375ba"
+    },
+    "test": {
+      "scp": "a66f57ec0029b074e7cc9945f002c489c7e2c2b6b94edfa59b67c39505a856b3",
+      "multitask": "251e3dc2da51d36f73b0a605bb8ee44508d1406d51714517bf78fbd5072deab6"
+    }
+  }
+}

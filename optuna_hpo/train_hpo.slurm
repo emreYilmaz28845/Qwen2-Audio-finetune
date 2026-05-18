@@ -23,7 +23,7 @@ source /gpfs/projects/etur92/ozu647717/venvs/qwen_mn5_rebuilt/bin/activate
 cd /gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune
 mkdir -p logs output_model optuna_studies
 
-export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
+export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd, cmdc
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
@@ -36,6 +36,9 @@ export DAIC_PERSON_THRESHOLD="$DAIC_WOZ_PERSON_THRESHOLD"
 export EATD_EVAL_LEVEL="${EATD_EVAL_LEVEL:-person}"
 export EATD_EVAL_MODE="${EATD_EVAL_MODE:-majority_vote}"
 export EATD_PERSON_THRESHOLD="${EATD_PERSON_THRESHOLD:-0.5}"
+export CMDC_EVAL_LEVEL="${CMDC_EVAL_LEVEL:-person}"
+export CMDC_EVAL_MODE="${CMDC_EVAL_MODE:-majority_vote}"
+export CMDC_PERSON_THRESHOLD="${CMDC_PERSON_THRESHOLD:-0.5}"
 export ENABLE_PRUNING="${ENABLE_PRUNING:-1}"
 export PRUNER_STARTUP_TRIALS="${PRUNER_STARTUP_TRIALS:-5}"
 export PRUNER_WARMUP_STEPS="${PRUNER_WARMUP_STEPS:-2}"
@@ -89,16 +92,25 @@ case "$DATASET_NAME" in
         ;;
     eatd)
         DATASET_ROOT_DEFAULT="/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/data/eatd"
-        EVAL_SPLIT="test"
+        EVAL_SPLIT="val"
         LOG_DIR_NAME="optuna_eatd"
         STORAGE_DIR_NAME="optuna_eatd"
         OUTPUT_DIR_NAME="optuna_eatd_hpo"
         LOG_FILE_PREFIX="optuna_eatd"
         JOB_FILE_PREFIX="optuna-qwen-optuna-eatd"
         ;;
+    cmdc)
+        DATASET_ROOT_DEFAULT="/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/data/cmdc"
+        EVAL_SPLIT="val"
+        LOG_DIR_NAME="optuna_cmdc"
+        STORAGE_DIR_NAME="optuna_cmdc"
+        OUTPUT_DIR_NAME="optuna_cmdc_hpo"
+        LOG_FILE_PREFIX="optuna_cmdc"
+        JOB_FILE_PREFIX="optuna-qwen-optuna-cmdc"
+        ;;
     *)
         echo "Unsupported DATASET_NAME: $DATASET_NAME"
-        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, or DATASET_NAME=eatd"
+        echo "Use DATASET_NAME=merged, DATASET_NAME=daic_woz, DATASET_NAME=eatd, or DATASET_NAME=cmdc"
         exit 1
         ;;
 esac
@@ -108,6 +120,8 @@ if [ "$DATASET_NAME" = "daic_woz" ]; then
     DATASET_LEVEL_SUFFIX="_${DAIC_WOZ_EVAL_LEVEL}"
 elif [ "$DATASET_NAME" = "eatd" ]; then
     DATASET_LEVEL_SUFFIX="_${EATD_EVAL_LEVEL}"
+elif [ "$DATASET_NAME" = "cmdc" ]; then
+    DATASET_LEVEL_SUFFIX="_${CMDC_EVAL_LEVEL}"
 fi
 
 case "$PROMPT_MODE" in
@@ -142,13 +156,17 @@ esac
 
 export DATASET_ROOT="${DATASET_ROOT:-$DATASET_ROOT_DEFAULT}"
 export TRAIN_DATA_PATH="${TRAIN_DATA_PATH:-$DATASET_ROOT/train}"
-export EVAL_DATA_PATH="${EVAL_DATA_PATH:-$DATASET_ROOT/$EVAL_SPLIT}"
+export VAL_DATA_PATH="${VAL_DATA_PATH:-$DATASET_ROOT/$EVAL_SPLIT}"
+export EVAL_DATA_PATH="${EVAL_DATA_PATH:-$VAL_DATA_PATH}"
 export TRAIN_PROMPT_FILE="${TRAIN_PROMPT_FILE:-$PROMPT_FILE}"
-export EVAL_PROMPT_FILE="${EVAL_PROMPT_FILE:-$PROMPT_FILE}"
+export VAL_PROMPT_FILE="${VAL_PROMPT_FILE:-$PROMPT_FILE}"
+export EVAL_PROMPT_FILE="${EVAL_PROMPT_FILE:-$VAL_PROMPT_FILE}"
 export TRAIN_TASK_FILE="${TRAIN_TASK_FILE:-$TASK_FILE}"
-export EVAL_TASK_FILE="${EVAL_TASK_FILE:-$TASK_FILE}"
+export VAL_TASK_FILE="${VAL_TASK_FILE:-$TASK_FILE}"
+export EVAL_TASK_FILE="${EVAL_TASK_FILE:-$VAL_TASK_FILE}"
 export TRAIN_SCP_FILE="${TRAIN_SCP_FILE:-${DATASET_NAME}.scp}"
-export EVAL_SCP_FILE="${EVAL_SCP_FILE:-${DATASET_NAME}.scp}"
+export VAL_SCP_FILE="${VAL_SCP_FILE:-${DATASET_NAME}.scp}"
+export EVAL_SCP_FILE="${EVAL_SCP_FILE:-$VAL_SCP_FILE}"
 export WAV_TYPE="${WAV_TYPE:-wav}"
 export NUM_GPUS="${NUM_GPUS:-4}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -193,12 +211,15 @@ echo "DAIC Person Threshold: $DAIC_WOZ_PERSON_THRESHOLD" | tee -a "$LOG_FILE"
 echo "EATD Eval Level: $EATD_EVAL_LEVEL" | tee -a "$LOG_FILE"
 echo "EATD Eval Mode: $EATD_EVAL_MODE" | tee -a "$LOG_FILE"
 echo "EATD Person Threshold: $EATD_PERSON_THRESHOLD" | tee -a "$LOG_FILE"
+echo "CMDC Eval Level: $CMDC_EVAL_LEVEL" | tee -a "$LOG_FILE"
+echo "CMDC Eval Mode: $CMDC_EVAL_MODE" | tee -a "$LOG_FILE"
+echo "CMDC Person Threshold: $CMDC_PERSON_THRESHOLD" | tee -a "$LOG_FILE"
 echo "Launch Input Mode (derived): $LAUNCH_INPUT_MODE" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Train Data Path: $TRAIN_DATA_PATH" | tee -a "$LOG_FILE"
-echo "Eval Data Path: $EVAL_DATA_PATH" | tee -a "$LOG_FILE"
+echo "Validation Data Path: $VAL_DATA_PATH" | tee -a "$LOG_FILE"
 echo "Train Prompt File: $TRAIN_PROMPT_FILE" | tee -a "$LOG_FILE"
-echo "Eval Prompt File: $EVAL_PROMPT_FILE" | tee -a "$LOG_FILE"
+echo "Validation Prompt File: $VAL_PROMPT_FILE" | tee -a "$LOG_FILE"
 echo "Log Dir: $LOG_DIR" | tee -a "$LOG_FILE"
 echo "Storage Path: $STORAGE_PATH" | tee -a "$LOG_FILE"
 echo "Save Path: $SAVE_PATH" | tee -a "$LOG_FILE"
@@ -249,6 +270,10 @@ stop_gpu_logger() {
 trap stop_gpu_logger EXIT
 start_gpu_logger
 
+if [[ "${SKIP_SPLIT_VALIDATION:-0}" != "1" ]]; then
+    python tools/validate_splits.py --dataset "$DATASET_NAME" --strict 2>&1 | tee -a "$LOG_FILE"
+fi
+
 PRUNING_FLAG="--disable-pruning"
 case "${ENABLE_PRUNING,,}" in
     1|true|yes|on)
@@ -271,6 +296,9 @@ python optuna_hpo/hpo.py \
     --eatd-eval-level "$EATD_EVAL_LEVEL" \
     --eatd-eval-mode "$EATD_EVAL_MODE" \
     --eatd-person-threshold "$EATD_PERSON_THRESHOLD" \
+    --cmdc-eval-level "$CMDC_EVAL_LEVEL" \
+    --cmdc-eval-mode "$CMDC_EVAL_MODE" \
+    --cmdc-person-threshold "$CMDC_PERSON_THRESHOLD" \
     --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
     --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
     --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
