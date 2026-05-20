@@ -120,6 +120,10 @@ def main():
     cfg.env.debug_model_io_limit = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_LIMIT", "2"))
     cfg.env.debug_model_io_train_every_steps = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS", "1"))
     cfg.env.debug_model_io_eval_every_calls = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS", "1"))
+    cfg.eval.enable_teacher_forced_diagnostic = env_flag(
+        "AUDIOLLM_ENABLE_TEACHER_FORCED_EVAL_DIAGNOSTIC",
+        "0",
+    )
     cfg.eval.max_new_tokens = int(os.environ.get("AUDIOLLM_EVAL_MAX_NEW_TOKENS", "16"))
     cfg.eval.print_predictions_limit = int(os.environ.get("AUDIOLLM_EVAL_PRINT_PREDICTIONS_LIMIT", "5"))
     cfg.eval.daic_eval_level, cfg.eval.daic_eval_mode, cfg.eval.daic_person_threshold = grouped_cfg["daic_woz"]

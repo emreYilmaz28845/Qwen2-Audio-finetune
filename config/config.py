@@ -37,6 +37,7 @@ class EvalConfig:
     batch_size: int = 2
     local_rank : int = 0
     peft_path: str = ""
+    enable_teacher_forced_diagnostic: bool = False
     max_new_tokens: int = 16
     print_predictions_limit: int = 5
     daic_eval_level: str = "person"

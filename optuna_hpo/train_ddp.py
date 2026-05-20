@@ -412,6 +412,10 @@ def _eval_prediction_log_limit(cfg):
     return int(getattr(cfg.eval, "print_predictions_limit", 5))
 
 
+def _teacher_forced_eval_enabled(cfg):
+    return bool(getattr(cfg.eval, "enable_teacher_forced_diagnostic", False))
+
+
 def _make_generation_kwargs(metric_processor, cfg):
     tokenizer = metric_processor.tokenizer
     kwargs = {
@@ -545,6 +549,51 @@ def _extract_visible_input_text(metric_processor, batch, sample_idx: int = 0):
     else:
         visible_input_ids = input_ids[sample_idx]
     return _decode_ids(tokenizer, visible_input_ids, skip_special_tokens=False)
+
+
+def _maybe_log_generation_only_eval_debug(
+    logger,
+    cfg,
+    metric_processor,
+    generation_batch,
+    generated_text: str,
+    *,
+    rank: int,
+    epoch: int,
+    step: int,
+    event_index: int,
+    true_label_text: str = "",
+):
+    if logger is None or rank != 0 or not _model_io_debug_enabled(cfg):
+        return
+
+    state = _model_io_debug_state(cfg)
+    phase = "eval"
+    if state.get(phase, 0) >= _model_io_debug_limit(cfg):
+        return
+    if event_index <= 0:
+        return
+    interval = _model_io_debug_eval_every_calls(cfg)
+    if (event_index - 1) % interval != 0:
+        return
+    if state["last_logged_event"].get(phase) == event_index:
+        return
+
+    state[phase] = state.get(phase, 0) + 1
+    state["last_logged_event"][phase] = event_index
+    generation_input_text = _extract_visible_input_text(metric_processor, generation_batch, sample_idx=0)
+    generation_input_contains_target = bool(true_label_text and true_label_text in generation_input_text)
+    parsed_generate_label = _label_id_to_name(parse_generated_label(generated_text)["label"])
+    true_label = _label_id_to_name(map_target_text_to_binary(true_label_text))
+
+    logger.info("[Model IO Debug][EVAL #%s] epoch=%s step=%s", state[phase], epoch, step)
+    logger.info("  PHASE=eval")
+    logger.info("  generation_only_mode=True")
+    logger.info("  generation_prompt_only_input=%r", generation_input_text)
+    logger.info("  generation_input_contains_target=%s", generation_input_contains_target)
+    logger.info("  generation_output=%r", generated_text)
+    logger.info("  generation_parsed_label=%s", parsed_generate_label)
+    logger.info("  true_label=%s", true_label)
 
 
 def _prompt_only_generate_text(model, metric_processor, generation_batch, sample_idx: int = 0) -> str:
@@ -743,6 +792,10 @@ def _log_trial_header(logger, trial_name, cfg, world_size, input_mode):
         _eval_generation_max_new_tokens(cfg),
         _eval_prediction_log_limit(cfg),
     )
+    logger.info(
+        "Teacher-Forced Eval Diagnostic: %s",
+        _teacher_forced_eval_enabled(cfg),
+    )
     for grouped_dataset_name in sorted(GROUPED_DATASET_NAMES):
         logger.info(
             "%s Eval: level=%s mode=%s threshold=%.4f",
@@ -900,12 +953,13 @@ def _evaluate(
 ):
     eval_loss = 0.0
     eval_steps = 0
+    teacher_forced_enabled = _teacher_forced_eval_enabled(cfg)
     teacher_forced_segment_stats = None
     generation_segment_stats = make_binary_stats()
     generation_segment_stats["num_invalid_predictions"] = 0
     generation_per_dataset_segment_stats = {}
     generation_grouped_local_records = {dataset_name: [] for dataset_name in GROUPED_DATASET_NAMES}
-    teacher_forced_grouped_local_records = {dataset_name: [] for dataset_name in GROUPED_DATASET_NAMES}
+    teacher_forced_grouped_local_records = {dataset_name: [] for dataset_name in GROUPED_DATASET_NAMES} if teacher_forced_enabled else {}
     local_segment_prediction_examples = []
     eval_bar = tqdm(eval_dataloader, desc="[Eval]") if rank == 0 else eval_dataloader
     primary_grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
@@ -928,28 +982,31 @@ def _evaluate(
             target_texts = metadata.get("target_texts", [])
 
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-                outputs = model(**supervised_batch)
-                loss = outputs.loss
-                if collect_grouped_records:
-                    batch_teacher_forced_records = build_grouped_eval_records(
-                        metric_processor.tokenizer,
+                outputs = None
+                loss = None
+                if teacher_forced_enabled:
+                    outputs = model(**supervised_batch)
+                    loss = outputs.loss
+                    if collect_grouped_records:
+                        batch_teacher_forced_records = build_grouped_eval_records(
+                            metric_processor.tokenizer,
+                            outputs.logits,
+                            supervised_batch["labels"],
+                            dataset_names,
+                            segment_keys,
+                            group_ids,
+                            target_texts,
+                        )
+                        for grouped_dataset_name in datasets_requiring_grouped_records:
+                            teacher_forced_grouped_local_records[grouped_dataset_name].extend(
+                                batch_teacher_forced_records.get(grouped_dataset_name, [])
+                            )
+                    teacher_forced_segment_stats = compute_metrics_text_binary_accumulate(
+                        metric_processor,
                         outputs.logits,
                         supervised_batch["labels"],
-                        dataset_names,
-                        segment_keys,
-                        group_ids,
-                        target_texts,
+                        teacher_forced_segment_stats,
                     )
-                    for grouped_dataset_name in datasets_requiring_grouped_records:
-                        teacher_forced_grouped_local_records[grouped_dataset_name].extend(
-                            batch_teacher_forced_records.get(grouped_dataset_name, [])
-                        )
-                teacher_forced_segment_stats = compute_metrics_text_binary_accumulate(
-                    metric_processor,
-                    outputs.logits,
-                    supervised_batch["labels"],
-                    teacher_forced_segment_stats,
-                )
                 generated_ids = (model.module if hasattr(model, "module") else model).generate(
                     **generation_batch,
                     **generation_kwargs,
@@ -962,22 +1019,36 @@ def _evaluate(
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=False,
             )
-            _maybe_log_model_io_debug(
-                model,
-                logger,
-                cfg,
-                "eval",
-                metric_processor,
-                supervised_batch,
-                outputs.logits,
-                rank=rank,
-                epoch=epoch,
-                step=step,
-                event_index=eval_event_index,
-                loss=float(loss.item()),
-                generation_batch=generation_batch,
-                generated_text=generated_texts[0] if generated_texts else "",
-            )
+            if teacher_forced_enabled and outputs is not None and loss is not None:
+                _maybe_log_model_io_debug(
+                    model,
+                    logger,
+                    cfg,
+                    "eval",
+                    metric_processor,
+                    supervised_batch,
+                    outputs.logits,
+                    rank=rank,
+                    epoch=epoch,
+                    step=step,
+                    event_index=eval_event_index,
+                    loss=float(loss.item()),
+                    generation_batch=generation_batch,
+                    generated_text=generated_texts[0] if generated_texts else "",
+                )
+            else:
+                _maybe_log_generation_only_eval_debug(
+                    logger,
+                    cfg,
+                    metric_processor,
+                    generation_batch,
+                    generated_texts[0] if generated_texts else "",
+                    rank=rank,
+                    epoch=epoch,
+                    step=step,
+                    event_index=eval_event_index,
+                    true_label_text=target_texts[0] if target_texts else "",
+                )
             for sample_index, generated_text in enumerate(generated_texts):
                 dataset_name = dataset_names[sample_index] if sample_index < len(dataset_names) else ""
                 target_text = target_texts[sample_index] if sample_index < len(target_texts) else ""
@@ -1024,17 +1095,21 @@ def _evaluate(
                         }
                     )
 
-            eval_loss += loss.item()
-            eval_steps += 1
+            if loss is not None:
+                eval_loss += loss.item()
+                eval_steps += 1
             if rank == 0 and generation_segment_stats["total"] > 0:
                 temp_acc, _, _, temp_f1, temp_wf1 = compute_metrics_from_stats(generation_segment_stats)
                 eval_bar.set_description(
-                    f"[Eval] gen_loss {loss:.3f} | gen_acc {temp_acc:.4f} | gen_posF1 {temp_f1:.4f} | gen_wF1 {temp_wf1:.4f}"
+                    f"[Eval] gen_loss {(float(loss.item()) if loss is not None else 0.0):.3f} | gen_acc {temp_acc:.4f} | gen_posF1 {temp_f1:.4f} | gen_wF1 {temp_wf1:.4f}"
                 )
 
-    loss_tensor = torch.tensor([eval_loss, float(eval_steps)], device=device, dtype=torch.float32)
-    dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
-    reduced_eval_loss = (loss_tensor[0] / loss_tensor[1]).item() if loss_tensor[1] > 0 else 0.0
+    if teacher_forced_enabled:
+        loss_tensor = torch.tensor([eval_loss, float(eval_steps)], device=device, dtype=torch.float32)
+        dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
+        reduced_eval_loss = (loss_tensor[0] / loss_tensor[1]).item() if loss_tensor[1] > 0 else 0.0
+    else:
+        reduced_eval_loss = 0.0
 
     generation_per_dataset_segment_stats = _gather_and_merge_stats_by_dataset(generation_per_dataset_segment_stats)
     generation_segment_stats = _merge_stats_dicts(
@@ -1042,19 +1117,22 @@ def _evaluate(
         _gather_and_merge_stats_by_dataset({"__overall__": generation_segment_stats}).get("__overall__", make_binary_stats()),
     )
 
-    teacher_forced_segment_stats = _merge_stats_dicts(
-        None,
-        _gather_and_merge_stats_by_dataset({"__overall__": teacher_forced_segment_stats or make_binary_stats()}).get(
-            "__overall__", make_binary_stats()
-        ),
-    )
+    if teacher_forced_enabled:
+        teacher_forced_segment_stats = _merge_stats_dicts(
+            None,
+            _gather_and_merge_stats_by_dataset({"__overall__": teacher_forced_segment_stats or make_binary_stats()}).get(
+                "__overall__", make_binary_stats()
+            ),
+        )
+    else:
+        teacher_forced_segment_stats = None
     segment_prediction_examples = _gather_limited_examples(local_segment_prediction_examples, prediction_log_limit)
 
     generation_supplemental_stats_by_dataset = {}
     generation_primary_stats = dict(generation_segment_stats)
     generation_segment_level_stats_by_dataset = dict(generation_per_dataset_segment_stats)
     teacher_forced_supplemental_stats_by_dataset = {}
-    teacher_forced_primary_stats = dict(teacher_forced_segment_stats)
+    teacher_forced_primary_stats = dict(teacher_forced_segment_stats) if teacher_forced_segment_stats else None
     participant_predictions_by_dataset = {}
     if collect_grouped_records:
         gathered_generation_records = [None for _ in range(dist.get_world_size())]
@@ -1084,25 +1162,26 @@ def _evaluate(
         )
         generation_primary_stats = generation_overall_after_person
 
-        gathered_teacher_forced_records = [None for _ in range(dist.get_world_size())]
-        dist.all_gather_object(gathered_teacher_forced_records, teacher_forced_grouped_local_records)
-        merged_teacher_forced_records_by_dataset = {dataset_name: [] for dataset_name in datasets_requiring_grouped_records}
-        for record_group in gathered_teacher_forced_records:
-            for grouped_dataset_name in datasets_requiring_grouped_records:
-                merged_teacher_forced_records_by_dataset[grouped_dataset_name].extend(
-                    (record_group or {}).get(grouped_dataset_name, [])
-                )
+        if teacher_forced_enabled:
+            gathered_teacher_forced_records = [None for _ in range(dist.get_world_size())]
+            dist.all_gather_object(gathered_teacher_forced_records, teacher_forced_grouped_local_records)
+            merged_teacher_forced_records_by_dataset = {dataset_name: [] for dataset_name in datasets_requiring_grouped_records}
+            for record_group in gathered_teacher_forced_records:
+                for grouped_dataset_name in datasets_requiring_grouped_records:
+                    merged_teacher_forced_records_by_dataset[grouped_dataset_name].extend(
+                        (record_group or {}).get(grouped_dataset_name, [])
+                    )
 
-        for grouped_dataset_name, merged_records in merged_teacher_forced_records_by_dataset.items():
-            stats = aggregate_group_predictions(
-                merged_records,
-                mode=_grouped_eval_mode(cfg, grouped_dataset_name),
-                threshold=_grouped_eval_threshold(cfg, grouped_dataset_name),
-            )
-            if grouped_dataset_name == primary_grouped_dataset_name:
-                teacher_forced_primary_stats = stats
-            elif grouped_dataset_name in supplemental_grouped_datasets:
-                teacher_forced_supplemental_stats_by_dataset[grouped_dataset_name] = stats
+            for grouped_dataset_name, merged_records in merged_teacher_forced_records_by_dataset.items():
+                stats = aggregate_group_predictions(
+                    merged_records,
+                    mode=_grouped_eval_mode(cfg, grouped_dataset_name),
+                    threshold=_grouped_eval_threshold(cfg, grouped_dataset_name),
+                )
+                if grouped_dataset_name == primary_grouped_dataset_name:
+                    teacher_forced_primary_stats = stats
+                elif grouped_dataset_name in supplemental_grouped_datasets:
+                    teacher_forced_supplemental_stats_by_dataset[grouped_dataset_name] = stats
 
     participant_prediction_examples = {
         dataset_name: predictions if prediction_log_limit <= 0 else predictions[:prediction_log_limit]
@@ -1121,6 +1200,7 @@ def _evaluate(
             "participant_predictions_by_dataset": participant_predictions_by_dataset,
         },
         "teacher_forced": {
+            "enabled": teacher_forced_enabled,
             "primary_stats": teacher_forced_primary_stats,
             "supplemental_stats_by_dataset": teacher_forced_supplemental_stats_by_dataset,
             "segment_level_overall_stats": teacher_forced_segment_stats,
@@ -1322,14 +1402,17 @@ def train_textonly_ddp(cfg, trial_name=""):
                     eval_loss = eval_results["eval_loss"]
                     generation_stats = eval_results["generation"]["primary_stats"]
                     generation_supplemental_stats_by_dataset = eval_results["generation"]["supplemental_stats_by_dataset"]
+                    teacher_forced_enabled = eval_results["teacher_forced"]["enabled"]
                     teacher_forced_stats = eval_results["teacher_forced"]["primary_stats"]
                     teacher_forced_supplemental_stats_by_dataset = eval_results["teacher_forced"]["supplemental_stats_by_dataset"]
                     eval_accuracy, eval_precision, eval_recall, eval_f1, eval_wf1 = compute_metrics_from_stats(
                         generation_stats
                     )
-                    tf_accuracy, tf_precision, tf_recall, tf_f1, tf_wf1 = compute_metrics_from_stats(
-                        teacher_forced_stats
-                    )
+                    tf_accuracy = tf_precision = tf_recall = tf_f1 = tf_wf1 = 0.0
+                    if teacher_forced_enabled and teacher_forced_stats:
+                        tf_accuracy, tf_precision, tf_recall, tf_f1, tf_wf1 = compute_metrics_from_stats(
+                            teacher_forced_stats
+                        )
                     _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
                     grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
                     metric_scope = f"Person ({grouped_dataset_name})" if grouped_dataset_name else "Segment"
@@ -1351,17 +1434,20 @@ def train_textonly_ddp(cfg, trial_name=""):
                             _grouped_eval_mode(cfg, grouped_dataset_name),
                             _grouped_eval_threshold(cfg, grouped_dataset_name),
                         )
-                    logger.info("[Epoch %s Step %s] teacher_forced_diagnostic (%s):", epoch, train_step, metric_scope)
-                    logger.info(
-                        "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
-                        eval_loss,
-                        tf_accuracy,
-                        tf_precision,
-                        tf_recall,
-                        tf_f1,
-                        tf_wf1,
-                    )
-                    logger.info("  Generation minus teacher-forced F1 delta: %.4f", eval_f1 - tf_f1)
+                    if teacher_forced_enabled and teacher_forced_stats:
+                        logger.info("[Epoch %s Step %s] teacher_forced_diagnostic (%s):", epoch, train_step, metric_scope)
+                        logger.info(
+                            "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
+                            eval_loss,
+                            tf_accuracy,
+                            tf_precision,
+                            tf_recall,
+                            tf_f1,
+                            tf_wf1,
+                        )
+                        logger.info("  Generation minus teacher-forced F1 delta: %.4f", eval_f1 - tf_f1)
+                    else:
+                        logger.info("[Epoch %s Step %s] teacher_forced_diagnostic: disabled", epoch, train_step)
                     for supplemental_dataset_name, supplemental_stats in generation_supplemental_stats_by_dataset.items():
                         sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
                         logger.info(
@@ -1377,21 +1463,22 @@ def train_textonly_ddp(cfg, trial_name=""):
                             _grouped_eval_mode(cfg, supplemental_dataset_name),
                             _grouped_eval_threshold(cfg, supplemental_dataset_name),
                         )
-                    for supplemental_dataset_name, supplemental_stats in teacher_forced_supplemental_stats_by_dataset.items():
-                        sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
-                        logger.info(
-                            "  Supplemental teacher-forced %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
-                            supplemental_dataset_name,
-                            sup_acc,
-                            sup_prec,
-                            sup_rec,
-                            sup_f1,
-                            sup_wf1,
-                            supplemental_stats.get("num_participants", 0),
-                            supplemental_stats.get("num_segments", 0),
-                            _grouped_eval_mode(cfg, supplemental_dataset_name),
-                            _grouped_eval_threshold(cfg, supplemental_dataset_name),
-                        )
+                    if teacher_forced_enabled:
+                        for supplemental_dataset_name, supplemental_stats in teacher_forced_supplemental_stats_by_dataset.items():
+                            sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
+                            logger.info(
+                                "  Supplemental teacher-forced %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
+                                supplemental_dataset_name,
+                                sup_acc,
+                                sup_prec,
+                                sup_rec,
+                                sup_f1,
+                                sup_wf1,
+                                supplemental_stats.get("num_participants", 0),
+                                supplemental_stats.get("num_segments", 0),
+                                _grouped_eval_mode(cfg, supplemental_dataset_name),
+                                _grouped_eval_threshold(cfg, supplemental_dataset_name),
+                            )
                     _log_prediction_examples(
                         logger,
                         "[Eval] Segment Predictions",
@@ -1410,14 +1497,16 @@ def train_textonly_ddp(cfg, trial_name=""):
 
                     if eval_f1 > best_f1:
                         best_f1 = eval_f1
-                        teacher_forced_summary = _build_best_eval_summary(
-                            cfg,
-                            eval_loss,
-                            teacher_forced_stats,
-                            teacher_forced_supplemental_stats_by_dataset,
-                            eval_method="teacher_forced_diagnostic",
-                            segment_level_overall_stats=eval_results["teacher_forced"]["segment_level_overall_stats"],
-                        )
+                        teacher_forced_summary = None
+                        if teacher_forced_enabled and teacher_forced_stats:
+                            teacher_forced_summary = _build_best_eval_summary(
+                                cfg,
+                                eval_loss,
+                                teacher_forced_stats,
+                                teacher_forced_supplemental_stats_by_dataset,
+                                eval_method="teacher_forced_diagnostic",
+                                segment_level_overall_stats=eval_results["teacher_forced"]["segment_level_overall_stats"],
+                            )
                         cfg.env.best_teacher_forced_eval_summary = teacher_forced_summary
                         cfg.env.best_eval_summary = _build_best_eval_summary(
                             cfg,
@@ -1443,7 +1532,6 @@ def train_textonly_ddp(cfg, trial_name=""):
                                 {
                                     "eval/loss": eval_loss,
                                     "eval/f1": eval_f1,
-                                    "eval/teacher_forced_f1": tf_f1,
                                     "eval/best_f1": best_f1,
                                     "train/epoch": epoch,
                                     **{
@@ -1455,6 +1543,8 @@ def train_textonly_ddp(cfg, trial_name=""):
                                 },
                                 step=global_train_step,
                             )
+                            if teacher_forced_enabled and teacher_forced_stats:
+                                wandb_logger.log({"eval/teacher_forced_f1": tf_f1}, step=global_train_step)
                 model.train()
 
     return _finalize_run(logger if rank == 0 else None, trial_name, best_f1, wandb_logger)
@@ -1660,14 +1750,17 @@ def train_audiotext_ddp(cfg, trial_name=""):
                     eval_loss = eval_results["eval_loss"]
                     generation_stats = eval_results["generation"]["primary_stats"]
                     generation_supplemental_stats_by_dataset = eval_results["generation"]["supplemental_stats_by_dataset"]
+                    teacher_forced_enabled = eval_results["teacher_forced"]["enabled"]
                     teacher_forced_stats = eval_results["teacher_forced"]["primary_stats"]
                     teacher_forced_supplemental_stats_by_dataset = eval_results["teacher_forced"]["supplemental_stats_by_dataset"]
                     eval_accuracy, eval_precision, eval_recall, eval_f1, eval_wf1 = compute_metrics_from_stats(
                         generation_stats
                     )
-                    tf_accuracy, tf_precision, tf_recall, tf_f1, tf_wf1 = compute_metrics_from_stats(
-                        teacher_forced_stats
-                    )
+                    tf_accuracy = tf_precision = tf_recall = tf_f1 = tf_wf1 = 0.0
+                    if teacher_forced_enabled and teacher_forced_stats:
+                        tf_accuracy, tf_precision, tf_recall, tf_f1, tf_wf1 = compute_metrics_from_stats(
+                            teacher_forced_stats
+                        )
                     _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
                     grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
                     metric_scope = f"Person ({grouped_dataset_name})" if grouped_dataset_name else "Segment"
@@ -1689,17 +1782,20 @@ def train_audiotext_ddp(cfg, trial_name=""):
                             _grouped_eval_mode(cfg, grouped_dataset_name),
                             _grouped_eval_threshold(cfg, grouped_dataset_name),
                         )
-                    logger.info("[Epoch %s Step %s] teacher_forced_diagnostic (%s):", epoch, train_step, metric_scope)
-                    logger.info(
-                        "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
-                        eval_loss,
-                        tf_accuracy,
-                        tf_precision,
-                        tf_recall,
-                        tf_f1,
-                        tf_wf1,
-                    )
-                    logger.info("  Generation minus teacher-forced F1 delta: %.4f", eval_f1 - tf_f1)
+                    if teacher_forced_enabled and teacher_forced_stats:
+                        logger.info("[Epoch %s Step %s] teacher_forced_diagnostic (%s):", epoch, train_step, metric_scope)
+                        logger.info(
+                            "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
+                            eval_loss,
+                            tf_accuracy,
+                            tf_precision,
+                            tf_recall,
+                            tf_f1,
+                            tf_wf1,
+                        )
+                        logger.info("  Generation minus teacher-forced F1 delta: %.4f", eval_f1 - tf_f1)
+                    else:
+                        logger.info("[Epoch %s Step %s] teacher_forced_diagnostic: disabled", epoch, train_step)
                     for supplemental_dataset_name, supplemental_stats in generation_supplemental_stats_by_dataset.items():
                         sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
                         logger.info(
@@ -1715,21 +1811,22 @@ def train_audiotext_ddp(cfg, trial_name=""):
                             _grouped_eval_mode(cfg, supplemental_dataset_name),
                             _grouped_eval_threshold(cfg, supplemental_dataset_name),
                         )
-                    for supplemental_dataset_name, supplemental_stats in teacher_forced_supplemental_stats_by_dataset.items():
-                        sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
-                        logger.info(
-                            "  Supplemental teacher-forced %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
-                            supplemental_dataset_name,
-                            sup_acc,
-                            sup_prec,
-                            sup_rec,
-                            sup_f1,
-                            sup_wf1,
-                            supplemental_stats.get("num_participants", 0),
-                            supplemental_stats.get("num_segments", 0),
-                            _grouped_eval_mode(cfg, supplemental_dataset_name),
-                            _grouped_eval_threshold(cfg, supplemental_dataset_name),
-                        )
+                    if teacher_forced_enabled:
+                        for supplemental_dataset_name, supplemental_stats in teacher_forced_supplemental_stats_by_dataset.items():
+                            sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
+                            logger.info(
+                                "  Supplemental teacher-forced %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
+                                supplemental_dataset_name,
+                                sup_acc,
+                                sup_prec,
+                                sup_rec,
+                                sup_f1,
+                                sup_wf1,
+                                supplemental_stats.get("num_participants", 0),
+                                supplemental_stats.get("num_segments", 0),
+                                _grouped_eval_mode(cfg, supplemental_dataset_name),
+                                _grouped_eval_threshold(cfg, supplemental_dataset_name),
+                            )
                     _log_prediction_examples(
                         logger,
                         "[Eval] Segment Predictions",
@@ -1748,14 +1845,16 @@ def train_audiotext_ddp(cfg, trial_name=""):
 
                     if eval_f1 > best_f1:
                         best_f1 = eval_f1
-                        teacher_forced_summary = _build_best_eval_summary(
-                            cfg,
-                            eval_loss,
-                            teacher_forced_stats,
-                            teacher_forced_supplemental_stats_by_dataset,
-                            eval_method="teacher_forced_diagnostic",
-                            segment_level_overall_stats=eval_results["teacher_forced"]["segment_level_overall_stats"],
-                        )
+                        teacher_forced_summary = None
+                        if teacher_forced_enabled and teacher_forced_stats:
+                            teacher_forced_summary = _build_best_eval_summary(
+                                cfg,
+                                eval_loss,
+                                teacher_forced_stats,
+                                teacher_forced_supplemental_stats_by_dataset,
+                                eval_method="teacher_forced_diagnostic",
+                                segment_level_overall_stats=eval_results["teacher_forced"]["segment_level_overall_stats"],
+                            )
                         cfg.env.best_teacher_forced_eval_summary = teacher_forced_summary
                         cfg.env.best_eval_summary = _build_best_eval_summary(
                             cfg,
@@ -1783,7 +1882,6 @@ def train_audiotext_ddp(cfg, trial_name=""):
                                 {
                                     "eval/loss": eval_loss,
                                     "eval/f1": eval_f1,
-                                    "eval/teacher_forced_f1": tf_f1,
                                     "eval/best_f1": best_f1,
                                     "train/epoch": epoch,
                                     **{
@@ -1795,6 +1893,8 @@ def train_audiotext_ddp(cfg, trial_name=""):
                                 },
                                 step=global_train_step,
                             )
+                            if teacher_forced_enabled and teacher_forced_stats:
+                                wandb_logger.log({"eval/teacher_forced_f1": tf_f1}, step=global_train_step)
                 model.train()
 
     return _finalize_run(logger if rank == 0 else None, trial_name, best_f1, wandb_logger)
