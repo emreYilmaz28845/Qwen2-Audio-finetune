@@ -22,6 +22,9 @@
 #   RESULTS_DIR=/custom/results/dir
 #   OUTPUT_JSON=/custom/results.json
 #   EVAL_NAME=custom_eval_name
+#   MAX_NEW_TOKENS=16
+#   PRINT_PREDICTIONS_LIMIT=50
+#   TEACHER_FORCED_RESULTS_JSON=/path/to/old_results.json
 # ============================================================
 
 set -e
@@ -45,6 +48,9 @@ EATD_PERSON_THRESHOLD="${EATD_PERSON_THRESHOLD:-0.5}"
 CMDC_EVAL_LEVEL="${CMDC_EVAL_LEVEL:-person}"
 CMDC_EVAL_MODE="${CMDC_EVAL_MODE:-majority_vote}"
 CMDC_PERSON_THRESHOLD="${CMDC_PERSON_THRESHOLD:-0.5}"
+MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-16}"
+PRINT_PREDICTIONS_LIMIT="${PRINT_PREDICTIONS_LIMIT:-50}"
+TEACHER_FORCED_RESULTS_JSON="${TEACHER_FORCED_RESULTS_JSON:-}"
 
 BATCH_SIZE="${BATCH_SIZE:-1}"
 DEVICE="${DEVICE:-cuda:0}"
@@ -218,6 +224,9 @@ echo "  EATD_THRESHOLD  : $EATD_PERSON_THRESHOLD"
 echo "  CMDC_LEVEL      : $CMDC_EVAL_LEVEL"
 echo "  CMDC_MODE       : $CMDC_EVAL_MODE"
 echo "  CMDC_THRESHOLD  : $CMDC_PERSON_THRESHOLD"
+echo "  EVAL_METHOD     : prompt-only generation"
+echo "  MAX_NEW_TOKENS  : $MAX_NEW_TOKENS"
+echo "  PRINT_LIMIT     : $PRINT_PREDICTIONS_LIMIT"
 echo "  CHECKPOINT_MODE : $CHECKPOINT_MODE"
 echo "  EVAL_SCRIPT     : $EVAL_SCRIPT"
 echo "  MODEL_PATH      : $MODEL_PATH"
@@ -234,6 +243,9 @@ else
 fi
 echo "  DATA_PATH       : $DATA_PATH"
 echo "  PROMPT_PATH     : $PROMPT_PATH"
+if [[ -n "$TEACHER_FORCED_RESULTS_JSON" ]]; then
+    echo "  OLD_RESULTS     : $TEACHER_FORCED_RESULTS_JSON"
+fi
 echo "  DEVICE          : $DEVICE"
 echo "============================================"
 
@@ -255,7 +267,13 @@ CMD=(
     --batch_size "$BATCH_SIZE"
     --device "$DEVICE"
     --output_json "$OUTPUT_JSON"
+    --max_new_tokens "$MAX_NEW_TOKENS"
+    --print_predictions_limit "$PRINT_PREDICTIONS_LIMIT"
 )
+
+if [[ -n "$TEACHER_FORCED_RESULTS_JSON" ]]; then
+    CMD+=(--teacher_forced_results_json "$TEACHER_FORCED_RESULTS_JSON")
+fi
 
 if [[ "$MODEL_FAMILY" == "audio" ]]; then
     CMD+=(

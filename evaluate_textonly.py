@@ -20,7 +20,6 @@ Usage:
 import argparse
 import json
 import os
-import copy
 from functools import partial
 
 import torch
@@ -32,21 +31,20 @@ from utils.grouped_eval import (
     GROUPED_DATASET_NAMES,
     SUPPORTED_GROUPED_EVAL_LEVELS,
     SUPPORTED_GROUPED_EVAL_MODES,
-    apply_person_level_results,
-    build_grouped_eval_records,
+    apply_generated_person_level_results,
     build_grouped_task_metadata,
     grouped_eval_enabled,
     grouped_eval_env_prefix,
     grouped_person_results_key,
     make_binary_stats,
+    map_target_text_to_binary,
     normalize_grouped_eval_level,
     normalize_grouped_eval_mode,
+    parse_generated_label,
+    update_binary_stats_with_prediction,
     validate_grouped_person_threshold,
 )
-from utils.functions import (
-    compute_metrics_from_stats,
-    compute_metrics_text_binary_accumulate,
-)
+from utils.functions import compute_metrics_from_stats
 
 
 # ===============================
@@ -82,65 +80,27 @@ class TextOnlyDatasetWithMeta(torch.utils.data.Dataset):
         return item
 
 
-def collate_fn_textonly_with_meta(samples, tokenizer):
-    """Collate for text-only eval, also returns dataset_names."""
+def collate_fn_textonly_generation_with_meta(samples, tokenizer):
+    """Collate prompt-only inputs for generation-based evaluation."""
     dataset_names = [s.pop("dataset_name") for s in samples]
     target_texts = [s.pop("target_text") for s in samples]
     segment_keys = [s.pop("segment_key") for s in samples]
     group_ids = [s.pop("group_id") for s in samples]
     prompts = [s["prompt"] for s in samples]
-    targets = [s["target"] for s in samples]
 
-    full_texts = [p + t for p, t in zip(prompts, targets)]
     processed_data = tokenizer(
-        full_texts,
+        prompts,
         return_tensors="pt",
         padding=True,
         truncation=True,
         max_length=2048,
     )
-
-    labels = copy.deepcopy(processed_data["input_ids"])
-    prompt_tokens = tokenizer(prompts, return_tensors="pt", padding=True)
-
-    for i, attention_mask in enumerate(prompt_tokens["attention_mask"]):
-        prompt_len = attention_mask.sum().item()
-        pad_count = (processed_data["input_ids"][i] == tokenizer.pad_token_id).sum().item()
-        labels[i, : prompt_len + pad_count] = -100
-
-    processed_data["labels"] = labels
     processed_data["dataset_names"] = dataset_names
     processed_data["target_texts"] = target_texts
     processed_data["segment_keys"] = segment_keys
     processed_data["group_ids"] = group_ids
+    processed_data["prompts"] = prompts
     return processed_data
-
-
-# ===============================
-# Processor-like wrapper
-# ===============================
-class TokenizerWrapper:
-    def __init__(self, tokenizer):
-        self.tokenizer = tokenizer
-
-
-# ===============================
-# Per-dataset stats
-# ===============================
-def accumulate_segment_stats_per_dataset(processor_compat, logits, labels, dataset_names,
-                                         per_dataset_stats, overall_stats):
-    compute_metrics_text_binary_accumulate(processor_compat, logits, labels, overall_stats)
-
-    B = labels.size(0)
-    for b in range(B):
-        ds_name = dataset_names[b]
-        if ds_name not in per_dataset_stats:
-            per_dataset_stats[ds_name] = make_binary_stats()
-        single_logits = logits[b:b+1]
-        single_labels = labels[b:b+1]
-        compute_metrics_text_binary_accumulate(
-            processor_compat, single_logits, single_labels, per_dataset_stats[ds_name]
-        )
 
 
 def format_metrics(stats):
@@ -165,6 +125,59 @@ def print_metrics_row(name, stats):
 
 def print_confusion_row(name, stats):
     print(f"{name:<15} {stats['tp']:>6} {stats['fp']:>6} {stats['fn']:>6} {stats['tn']:>6}")
+
+
+def label_to_text(label):
+    if label == 1:
+        return "depressed"
+    if label == 0:
+        return "non-depressed"
+    return "unknown"
+
+
+def update_segment_stats(stats, y_true, y_pred):
+    if y_true == -1:
+        return
+    update_binary_stats_with_prediction(stats, y_true, y_pred)
+
+
+def print_prediction_examples(title, predictions, limit):
+    print(f"\n{title}:")
+    if not predictions:
+        print("  (none)")
+        return
+    selected = predictions if limit <= 0 else predictions[:limit]
+    for item in selected:
+        print(json.dumps(item, ensure_ascii=False))
+    if limit > 0 and len(predictions) > limit:
+        print(f"  ... {len(predictions) - limit} more written to output JSON")
+
+
+def compare_with_teacher_forced_results(generation_results, teacher_forced_results_path):
+    if not teacher_forced_results_path:
+        return None
+    with open(teacher_forced_results_path, encoding="utf-8") as handle:
+        old_results = json.load(handle)
+
+    comparison = {}
+    for key, new_entry in generation_results.items():
+        if key.startswith("_") or key not in old_results:
+            continue
+        old_entry = old_results[key]
+        if not isinstance(old_entry, dict) or not isinstance(new_entry, dict):
+            continue
+        comparison[key] = {
+            "teacher_forced_f1": old_entry.get("f1"),
+            "generation_f1": new_entry.get("f1"),
+            "f1_delta_generation_minus_teacher_forced": (
+                None
+                if old_entry.get("f1") is None or new_entry.get("f1") is None
+                else new_entry.get("f1") - old_entry.get("f1")
+            ),
+            "teacher_forced_accuracy": old_entry.get("accuracy"),
+            "generation_accuracy": new_entry.get("accuracy"),
+        }
+    return comparison
 
 
 def resolve_grouped_eval_controls(args):
@@ -219,6 +232,11 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--output_json", type=str, default="")
+    parser.add_argument("--max_new_tokens", type=int, default=16)
+    parser.add_argument("--print_predictions_limit", type=int, default=50,
+                        help="Number of segment and participant predictions to print; <=0 prints all.")
+    parser.add_argument("--teacher_forced_results_json", type=str, default="",
+                        help="Optional previous teacher-forced results JSON for metric comparison.")
     args = parser.parse_args()
 
     device = args.device
@@ -239,6 +257,8 @@ def main():
         )
     print(f"[Config] device:     {device}")
     print(f"[Config] mode:       TEXT-ONLY (Qwen2-7B)")
+    print(f"[Config] eval_method: prompt-only generation")
+    print(f"[Config] max_new_tokens: {args.max_new_tokens}")
 
     # ===============================
     # Load model + tokenizer
@@ -264,8 +284,6 @@ def main():
     model.eval()
     model.to(device)
 
-    processor_compat = TokenizerWrapper(tokenizer)
-
     # ===============================
     # Load data
     # ===============================
@@ -280,7 +298,7 @@ def main():
         eval_dataset,
         batch_size=args.batch_size,
         num_workers=2,
-        collate_fn=partial(collate_fn_textonly_with_meta, tokenizer=tokenizer),
+        collate_fn=partial(collate_fn_textonly_generation_with_meta, tokenizer=tokenizer),
         shuffle=False,
     )
     print(f"   Total samples: {len(eval_dataset)}")
@@ -292,12 +310,14 @@ def main():
     per_dataset_stats = {}
     overall_stats = make_binary_stats()
     grouped_records_by_dataset = {dataset: [] for dataset in GROUPED_DATASET_NAMES}
-    eval_loss_sum = 0.0
-    eval_steps = 0
-    use_person_as_primary = (
-        grouped_eval_enabled(dataset_name)
-        and level_by_dataset.get(dataset_name, "segment") == "person"
-    )
+    segment_predictions = []
+    generation_kwargs = {
+        "max_new_tokens": args.max_new_tokens,
+        "do_sample": False,
+        "num_beams": 1,
+        "pad_token_id": tokenizer.pad_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+    }
 
     with torch.no_grad():
         for batch in tqdm(eval_dataloader, desc="[Eval]"):
@@ -305,37 +325,72 @@ def main():
             target_texts = batch.pop("target_texts")
             segment_keys = batch.pop("segment_keys")
             group_ids = batch.pop("group_ids")
-            batch = {k: v.to(device) for k, v in batch.items()}
+            prompts = batch.pop("prompts")
+            model_inputs = {key: value.to(device) for key, value in batch.items()}
+            input_length = model_inputs["input_ids"].shape[1]
 
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-                outputs = model(**batch)
-                loss = outputs.loss
+                generated_ids = model.generate(**model_inputs, **generation_kwargs)
 
-            eval_loss_sum += loss.item()
-            eval_steps += 1
-
-            if not use_person_as_primary:
-                accumulate_segment_stats_per_dataset(
-                    processor_compat, outputs.logits, batch["labels"],
-                    dataset_names, per_dataset_stats, overall_stats,
-                )
-            batch_grouped_records = build_grouped_eval_records(
-                tokenizer,
-                outputs.logits,
-                batch["labels"],
-                dataset_names,
-                segment_keys,
-                group_ids,
-                target_texts,
+            generated_only_ids = generated_ids[:, input_length:]
+            generated_texts = tokenizer.batch_decode(
+                generated_only_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
             )
-            for grouped_dataset_name, grouped_records in batch_grouped_records.items():
-                grouped_records_by_dataset[grouped_dataset_name].extend(grouped_records)
+
+            for idx, generated_text in enumerate(generated_texts):
+                ds_name = dataset_names[idx]
+                y_true = map_target_text_to_binary(target_texts[idx])
+                parse = parse_generated_label(generated_text)
+                y_pred = parse["label"]
+
+                update_segment_stats(overall_stats, y_true, y_pred)
+                if ds_name not in per_dataset_stats:
+                    per_dataset_stats[ds_name] = make_binary_stats()
+                update_segment_stats(per_dataset_stats[ds_name], y_true, y_pred)
+
+                prediction_record = {
+                    "dataset": ds_name,
+                    "segment_key": segment_keys[idx],
+                    "participant_id": group_ids[idx],
+                    "prompt": prompts[idx],
+                    "target_text": target_texts[idx],
+                    "true_label": y_true,
+                    "true_label_text": label_to_text(y_true),
+                    "raw_generated_text": generated_text,
+                    "normalized_generated_text": parse["normalized_text"],
+                    "parsed_label": y_pred,
+                    "parsed_label_text": label_to_text(y_pred),
+                    "matched_pattern": parse["matched_pattern"],
+                    "ambiguous": parse["ambiguous"],
+                    "parse_reason": parse["parse_reason"],
+                }
+                segment_predictions.append(prediction_record)
+
+                if grouped_eval_enabled(ds_name) and segment_keys[idx] and group_ids[idx]:
+                    grouped_records_by_dataset[ds_name].append(
+                        {
+                            "key": segment_keys[idx],
+                            "group_id": group_ids[idx],
+                            "target_text": target_texts[idx],
+                            "pred_label": y_pred,
+                            "depressed_probability": 1.0 if y_pred == 1 else 0.0,
+                            "raw_generated_text": generated_text,
+                            "parse_reason": parse["parse_reason"],
+                        }
+                    )
 
     # ===============================
     # Print results
     # ===============================
-    avg_loss = eval_loss_sum / eval_steps if eval_steps > 0 else 0.0
-    per_dataset_stats, overall_stats, supplemental_results = apply_person_level_results(
+    segment_level_results = {
+        ds_name: format_result_entry(stats)
+        for ds_name, stats in sorted(per_dataset_stats.items())
+    }
+    segment_level_results["overall"] = format_result_entry(overall_stats)
+
+    per_dataset_stats, overall_stats, supplemental_results, participant_predictions_by_dataset = apply_generated_person_level_results(
         dataset_name=dataset_name,
         level_by_dataset=level_by_dataset,
         mode_by_dataset=mode_by_dataset,
@@ -346,7 +401,7 @@ def main():
     )
 
     print("\n" + "=" * 90)
-    print(f"  PER-DATASET EVALUATION RESULTS (TEXT-ONLY Qwen2-7B)    (avg loss: {avg_loss:.4f})")
+    print("  PER-DATASET EVALUATION RESULTS (TEXT-ONLY Qwen2-7B, PROMPT-ONLY GENERATION)")
     print("=" * 90)
     print(f"{'Dataset':<15} {'Samples':>8} {'Acc':>8} {'Prec':>8} {'Recall':>8} {'F1':>8} {'wF1':>8}")
     print("-" * 90)
@@ -364,9 +419,19 @@ def main():
             "grouped_person_thresholds": threshold_by_dataset,
             "batch_size": args.batch_size,
             "device": args.device,
-            "avg_loss": avg_loss,
+            "eval_method": "prompt_only_generation",
+            "max_new_tokens": args.max_new_tokens,
+            "parsing_policy": (
+                "Generated text is lowercased and whitespace-normalized. Explicit Chinese and English "
+                "non-depressed patterns are matched before depressed patterns so 非抑郁 is not mistaken "
+                "for 抑郁. If both classes appear, the last explicit class mention is used and marked "
+                "ambiguous. If no supported class is found, prediction is unknown and counted as an error."
+            ),
             "used_peft": use_peft,
-        }
+        },
+        "_segment_level": segment_level_results,
+        "_segment_predictions": segment_predictions,
+        "_participant_predictions": participant_predictions_by_dataset,
     }
     for ds_name in sorted(per_dataset_stats.keys()):
         stats = per_dataset_stats[ds_name]
@@ -409,13 +474,28 @@ def main():
     print("-" * 50)
     print_confusion_row("OVERALL", overall_stats)
 
+    print_prediction_examples("Segment Predictions", segment_predictions, args.print_predictions_limit)
+    flat_participant_predictions = []
+    for ds_name, predictions in sorted(participant_predictions_by_dataset.items()):
+        for item in predictions:
+            flat_item = {"dataset": ds_name, **item}
+            flat_participant_predictions.append(flat_item)
+    print_prediction_examples("Participant Predictions", flat_participant_predictions, args.print_predictions_limit)
+
+    comparison = compare_with_teacher_forced_results(results, args.teacher_forced_results_json)
+    if comparison is not None:
+        results["_teacher_forced_comparison"] = comparison
+        print("\nTeacher-Forced vs Prompt-Only Generation:")
+        for key, value in sorted(comparison.items()):
+            print(json.dumps({"dataset": key, **value}, ensure_ascii=False))
+
     # Save JSON
     output_json = (args.output_json or "").strip()
     if not output_json:
         output_json = (
-            os.path.join(peft_path, "per_dataset_eval_textonly.json")
+            os.path.join(peft_path, "per_dataset_eval_textonly_generation.json")
             if use_peft
-            else os.path.abspath("base_per_dataset_eval_textonly.json")
+            else os.path.abspath("base_per_dataset_eval_textonly_generation.json")
         )
     os.makedirs(os.path.dirname(output_json) if os.path.dirname(output_json) else ".", exist_ok=True)
     with open(output_json, "w") as f:

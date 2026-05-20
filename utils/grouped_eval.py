@@ -22,10 +22,45 @@ GROUPED_NON_DEPRESSED_LABEL = "非抑郁"
 _DAIC_PARTICIPANT_ID_PATTERN = re.compile(r"^(?P<participant_id>\d+)")
 _EATD_SUBJECT_ID_PATTERN = re.compile(r"^(?P<subject_id>[^_]+)_")
 _CMDC_SUBJECT_ID_PATTERN = re.compile(r"^(?P<subject_id>[^_]+)_Q\d+$")
+_NON_DEPRESSED_PATTERNS = (
+    "非抑郁",
+    "非 抑郁",
+    "不抑郁",
+    "没有抑郁",
+    "無抑鬱",
+    "无抑郁",
+    "健康",
+    "正常",
+    "non-depressed",
+    "non depressed",
+    "not-depressed",
+    "not depressed",
+    "no depression",
+    "without depression",
+    "healthy",
+    "normal",
+)
+_DEPRESSED_PATTERNS = (
+    "抑郁",
+    "抑鬱",
+    "depressed",
+    "depression",
+)
 
 
 def make_binary_stats():
     return {"tp": 0, "fp": 0, "fn": 0, "tn": 0, "total": 0, "correct": 0}
+
+
+def update_binary_stats_with_prediction(stats: dict, y_true: int, y_pred: int):
+    if y_pred not in {0, 1}:
+        stats["total"] += 1
+        if y_true == 1:
+            stats["fn"] += 1
+        else:
+            stats["fp"] += 1
+        return
+    _update_binary_stats(stats, y_true, y_pred)
 
 
 def grouped_person_results_key(dataset_name: str):
@@ -114,6 +149,71 @@ def map_target_text_to_binary(target_text: str):
     if text == GROUPED_DEPRESSED_LABEL or GROUPED_DEPRESSED_LABEL in text:
         return 1
     return -1
+
+
+def _normalize_generated_text(text: str):
+    normalized = (text or "").strip().lower()
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
+
+
+def _find_pattern_matches(text: str, patterns, label: int):
+    matches = []
+    for pattern in patterns:
+        start = text.find(pattern)
+        while start != -1:
+            matches.append(
+                {
+                    "start": start,
+                    "end": start + len(pattern),
+                    "label": label,
+                    "pattern": pattern,
+                }
+            )
+            start = text.find(pattern, start + 1)
+    return matches
+
+
+def parse_generated_label(generated_text: str):
+    normalized = _normalize_generated_text(generated_text)
+    non_matches = _find_pattern_matches(normalized, _NON_DEPRESSED_PATTERNS, 0)
+    depressed_matches = _find_pattern_matches(normalized, _DEPRESSED_PATTERNS, 1)
+
+    non_spans = [(match["start"], match["end"]) for match in non_matches]
+    filtered_depressed_matches = []
+    for match in depressed_matches:
+        overlaps_non_depressed = any(
+            match["start"] >= span_start and match["end"] <= span_end
+            for span_start, span_end in non_spans
+        )
+        if not overlaps_non_depressed:
+            filtered_depressed_matches.append(match)
+
+    matches = sorted(non_matches + filtered_depressed_matches, key=lambda item: item["start"])
+    if not matches:
+        return {
+            "label": -1,
+            "label_text": "unknown",
+            "normalized_text": normalized,
+            "matched_pattern": "",
+            "ambiguous": False,
+            "parse_reason": "no supported class label found",
+        }
+
+    labels_found = {match["label"] for match in matches}
+    selected = matches[-1]
+    return {
+        "label": int(selected["label"]),
+        "label_text": GROUPED_DEPRESSED_LABEL if selected["label"] == 1 else GROUPED_NON_DEPRESSED_LABEL,
+        "normalized_text": normalized,
+        "matched_pattern": selected["pattern"],
+        "ambiguous": len(labels_found) > 1,
+        "parse_reason": (
+            "both classes found; chose last explicit class mention"
+            if len(labels_found) > 1
+            else "matched explicit class label"
+        ),
+    }
 
 
 def get_grouped_label_token_ids(tokenizer):
@@ -267,6 +367,73 @@ def aggregate_group_predictions(records, mode: str, threshold: float):
     return stats
 
 
+def aggregate_generated_group_predictions(records, mode: str, threshold: float):
+    normalized_mode = normalize_grouped_eval_mode(mode)
+    normalized_threshold = validate_grouped_person_threshold(threshold)
+
+    deduped_records = {}
+    for record in records:
+        key = record["key"]
+        deduped_records.setdefault(key, record)
+
+    grouped_records = defaultdict(list)
+    for record in deduped_records.values():
+        grouped_records[record["group_id"]].append(record)
+
+    stats = make_binary_stats()
+    participant_predictions = []
+
+    for group_id, group_records in grouped_records.items():
+        labels = {map_target_text_to_binary(record["target_text"]) for record in group_records}
+        labels.discard(-1)
+        if len(labels) != 1:
+            raise ValueError("Inconsistent or missing target labels within a grouped participant/session group.")
+        y_true = labels.pop()
+
+        valid_records = [record for record in group_records if record.get("pred_label") in {0, 1}]
+        if not valid_records:
+            y_pred = -1
+            mean_probability = 0.0
+        else:
+            depressed_probabilities = [float(record["depressed_probability"]) for record in valid_records]
+            mean_probability = sum(depressed_probabilities) / len(depressed_probabilities)
+            if normalized_mode == "majority_vote":
+                depressed_votes = sum(probability >= normalized_threshold for probability in depressed_probabilities)
+                non_depressed_votes = len(depressed_probabilities) - depressed_votes
+                if depressed_votes > non_depressed_votes:
+                    y_pred = 1
+                elif depressed_votes < non_depressed_votes:
+                    y_pred = 0
+                else:
+                    y_pred = 1 if mean_probability >= normalized_threshold else 0
+            elif normalized_mode == "mean_probability":
+                y_pred = 1 if mean_probability >= normalized_threshold else 0
+            else:
+                y_pred = 1 if max(depressed_probabilities) >= normalized_threshold else 0
+
+        update_binary_stats_with_prediction(stats, y_true, y_pred)
+        participant_predictions.append(
+            {
+                "participant_id": group_id,
+                "segment_keys": [record["key"] for record in group_records],
+                "segment_predictions": [record.get("pred_label", -1) for record in group_records],
+                "segment_probabilities": [float(record.get("depressed_probability", 0.0)) for record in group_records],
+                "segment_labels": [y_true for _ in group_records],
+                "participant_prediction": y_pred,
+                "participant_label": y_true,
+                "valid_segment_predictions": len(valid_records),
+                "total_segments": len(group_records),
+            }
+        )
+
+    stats["num_segments"] = len(deduped_records)
+    stats["num_participants"] = len(grouped_records)
+    stats["num_invalid_segments"] = sum(
+        1 for record in deduped_records.values() if record.get("pred_label") not in {0, 1}
+    )
+    return stats, participant_predictions
+
+
 def apply_person_level_results(
     dataset_name: str,
     level_by_dataset: dict,
@@ -299,3 +466,44 @@ def apply_person_level_results(
             supplemental_results[grouped_person_results_key(grouped_dataset_name)] = dict(person_stats)
 
     return next_per_dataset_stats, next_overall_stats, supplemental_results
+
+
+def apply_generated_person_level_results(
+    dataset_name: str,
+    level_by_dataset: dict,
+    mode_by_dataset: dict,
+    threshold_by_dataset: dict,
+    per_dataset_stats: dict,
+    overall_stats: dict,
+    grouped_records_by_dataset: dict,
+):
+    normalized_dataset_name = (dataset_name or "").strip().lower()
+    next_per_dataset_stats = dict(per_dataset_stats)
+    next_overall_stats = dict(overall_stats)
+    supplemental_results = {}
+    participant_predictions_by_dataset = {}
+
+    for grouped_dataset_name, records in grouped_records_by_dataset.items():
+        if not records:
+            continue
+        if normalize_grouped_eval_level(level_by_dataset.get(grouped_dataset_name, "segment")) != "person":
+            continue
+
+        person_stats, participant_predictions = aggregate_generated_group_predictions(
+            records,
+            mode=mode_by_dataset.get(grouped_dataset_name, "majority_vote"),
+            threshold=threshold_by_dataset.get(grouped_dataset_name, 0.5),
+        )
+        participant_predictions_by_dataset[grouped_dataset_name] = participant_predictions
+        if normalized_dataset_name == grouped_dataset_name:
+            next_per_dataset_stats[grouped_dataset_name] = dict(person_stats)
+            next_overall_stats = dict(person_stats)
+        elif normalized_dataset_name == "merged":
+            supplemental_results[grouped_person_results_key(grouped_dataset_name)] = dict(person_stats)
+
+    return (
+        next_per_dataset_stats,
+        next_overall_stats,
+        supplemental_results,
+        participant_predictions_by_dataset,
+    )
