@@ -432,6 +432,35 @@ def _make_generation_kwargs(metric_processor, cfg):
     return kwargs
 
 
+def _sanitize_generation_config(generate_model):
+    generation_config = getattr(generate_model, "generation_config", None)
+    if generation_config is None:
+        return
+    for attr_name in ("temperature", "top_p", "top_k"):
+        if hasattr(generation_config, attr_name):
+            setattr(generation_config, attr_name, None)
+
+
+def _prompt_mentions_class_options(prompt_text: str):
+    normalized_prompt = (prompt_text or "").lower()
+    class_markers = (
+        "抑郁",
+        "非抑郁",
+        "depressed",
+        "non-depressed",
+        "non depressed",
+        "not depressed",
+        "not-depressed",
+    )
+    return any(marker in normalized_prompt for marker in class_markers)
+
+
+def _input_ends_with_target_label(input_text: str, target_text: str):
+    normalized_input = (input_text or "").strip()
+    normalized_target = (target_text or "").strip()
+    return bool(normalized_target) and normalized_input.endswith(normalized_target)
+
+
 def _update_generation_stats(stats: dict, y_true: int, y_pred: int):
     if y_true == -1:
         return
@@ -582,7 +611,8 @@ def _maybe_log_generation_only_eval_debug(
     state[phase] = state.get(phase, 0) + 1
     state["last_logged_event"][phase] = event_index
     generation_input_text = _extract_visible_input_text(metric_processor, generation_batch, sample_idx=0)
-    generation_input_contains_target = bool(true_label_text and true_label_text in generation_input_text)
+    generation_prompt_mentions_class_label = _prompt_mentions_class_options(generation_input_text)
+    generation_input_ends_with_target_label = _input_ends_with_target_label(generation_input_text, true_label_text)
     parsed_generate_label = _label_id_to_name(parse_generated_label(generated_text)["label"])
     true_label = _label_id_to_name(map_target_text_to_binary(true_label_text))
 
@@ -590,7 +620,8 @@ def _maybe_log_generation_only_eval_debug(
     logger.info("  PHASE=eval")
     logger.info("  generation_only_mode=True")
     logger.info("  generation_prompt_only_input=%r", generation_input_text)
-    logger.info("  generation_input_contains_target=%s", generation_input_contains_target)
+    logger.info("  generation_prompt_mentions_class_label=%s", generation_prompt_mentions_class_label)
+    logger.info("  generation_input_ends_with_target_label=%s", generation_input_ends_with_target_label)
     logger.info("  generation_output=%r", generated_text)
     logger.info("  generation_parsed_label=%s", parsed_generate_label)
     logger.info("  true_label=%s", true_label)
@@ -607,6 +638,7 @@ def _prompt_only_generate_text(model, metric_processor, generation_batch, sample
             continue
         generate_inputs[key] = value[sample_idx : sample_idx + 1]
     generate_model = model.module if hasattr(model, "module") else model
+    _sanitize_generation_config(generate_model)
     tokenizer = metric_processor.tokenizer
     generation_kwargs = {
         "max_new_tokens": 8,
@@ -674,7 +706,8 @@ def _maybe_log_model_io_debug(
     prompt_only_generate = ""
     parsed_generate_label = "unknown"
     generation_input_text = ""
-    generation_input_contains_target = False
+    generation_prompt_mentions_class_label = False
+    generation_input_ends_with_target_label = False
     if phase == "eval":
         generation_source_batch = generation_batch if generation_batch is not None else batch
         generation_input_text = _extract_visible_input_text(metric_processor, generation_source_batch, sample_idx=0)
@@ -693,8 +726,10 @@ def _maybe_log_model_io_debug(
         debug_texts["target_text"] and debug_texts["target_text"] in debug_texts["full_input_text"]
     )
     if phase == "eval":
-        generation_input_contains_target = bool(
-            debug_texts["target_text"] and debug_texts["target_text"] in generation_input_text
+        generation_prompt_mentions_class_label = _prompt_mentions_class_options(generation_input_text)
+        generation_input_ends_with_target_label = _input_ends_with_target_label(
+            generation_input_text,
+            debug_texts["target_text"],
         )
 
     logger.info("[Model IO Debug][%s #%s] epoch=%s step=%s loss=%.4f", phase.upper(), state[phase], epoch, step, loss)
@@ -706,7 +741,8 @@ def _maybe_log_model_io_debug(
     logger.info("  teacher_forced_label_span_prediction=%r", debug_texts["predicted_text"])
     if phase == "eval":
         logger.info("  generation_prompt_only_input=%r", generation_input_text)
-        logger.info("  generation_input_contains_target=%s", generation_input_contains_target)
+        logger.info("  generation_prompt_mentions_class_label=%s", generation_prompt_mentions_class_label)
+        logger.info("  generation_input_ends_with_target_label=%s", generation_input_ends_with_target_label)
         logger.info("  generation_output=%r", prompt_only_generate)
         logger.info("  generation_parsed_label=%s", parsed_generate_label)
     logger.info("  true_label=%s", true_label)
