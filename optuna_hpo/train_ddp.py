@@ -32,11 +32,16 @@ from src.dataset import AudioDataset, collate_fn_qwen2audio
 from utils.grouped_eval import (
     GROUPED_DATASET_NAMES,
     aggregate_group_predictions,
+    apply_generated_person_level_results,
     build_grouped_eval_records,
     build_grouped_task_metadata,
     grouped_eval_enabled,
     grouped_person_results_key,
+    make_binary_stats,
+    map_target_text_to_binary,
     normalize_grouped_eval_level,
+    parse_generated_label,
+    update_binary_stats_with_prediction,
 )
 from utils.functions import (
     compute_acc_text,
@@ -162,6 +167,76 @@ def collate_fn_qwen2audio_with_meta(samples, processor):
     processed_data["segment_keys"] = segment_keys
     processed_data["group_ids"] = group_ids
     processed_data["target_texts"] = target_texts
+    return processed_data
+
+
+def collate_fn_textonly_eval_generation_with_meta(samples, tokenizer):
+    prompts = [sample["prompt"] for sample in samples]
+    processed_data = tokenizer(
+        prompts,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=2048,
+    )
+    processed_data["dataset_names"] = [sample["dataset_name"] for sample in samples]
+    processed_data["segment_keys"] = [sample["segment_key"] for sample in samples]
+    processed_data["group_ids"] = [sample["group_id"] for sample in samples]
+    processed_data["target_texts"] = [sample["target_text"] for sample in samples]
+    return processed_data
+
+
+def collate_fn_textonly_eval_dual(samples, tokenizer):
+    supervised_samples = [{"prompt": sample["prompt"], "target": sample["target"]} for sample in samples]
+    processed_data = collate_fn_textonly(supervised_samples, tokenizer)
+    generation_data = collate_fn_textonly_eval_generation_with_meta(samples, tokenizer)
+    processed_data["dataset_names"] = generation_data["dataset_names"]
+    processed_data["segment_keys"] = generation_data["segment_keys"]
+    processed_data["group_ids"] = generation_data["group_ids"]
+    processed_data["target_texts"] = generation_data["target_texts"]
+    for key, value in generation_data.items():
+        if key in {"dataset_names", "segment_keys", "group_ids", "target_texts"}:
+            continue
+        processed_data[f"gen_{key}"] = value
+    return processed_data
+
+
+def collate_fn_qwen2audio_eval_generation_with_meta(samples, processor):
+    prompts = [sample["prompt"] for sample in samples]
+    audio = [sample["audio"] for sample in samples]
+    processed_data = processor(
+        text=prompts,
+        audio=audio,
+        sampling_rate=processor.feature_extractor.sampling_rate,
+        return_tensors="pt",
+        padding=True,
+    )
+    processed_data["dataset_names"] = [sample["dataset_name"] for sample in samples]
+    processed_data["segment_keys"] = [sample["segment_key"] for sample in samples]
+    processed_data["group_ids"] = [sample["group_id"] for sample in samples]
+    processed_data["target_texts"] = [sample["target_text"] for sample in samples]
+    return processed_data
+
+
+def collate_fn_qwen2audio_eval_dual(samples, processor):
+    supervised_samples = [
+        {
+            "prompt": sample["prompt"],
+            "audio": sample["audio"],
+            "target": sample["target"],
+        }
+        for sample in samples
+    ]
+    processed_data = collate_fn_qwen2audio(supervised_samples, processor)
+    generation_data = collate_fn_qwen2audio_eval_generation_with_meta(samples, processor)
+    processed_data["dataset_names"] = generation_data["dataset_names"]
+    processed_data["segment_keys"] = generation_data["segment_keys"]
+    processed_data["group_ids"] = generation_data["group_ids"]
+    processed_data["target_texts"] = generation_data["target_texts"]
+    for key, value in generation_data.items():
+        if key in {"dataset_names", "segment_keys", "group_ids", "target_texts"}:
+            continue
+        processed_data[f"gen_{key}"] = value
     return processed_data
 
 
@@ -318,12 +393,7 @@ def _decode_ids(tokenizer, token_ids, *, skip_special_tokens: bool):
 
 
 def _map_label_text_to_id(text: str) -> int:
-    normalized = (text or "").strip()
-    if ("非抑郁" in normalized) or ("健康" in normalized):
-        return 0
-    if ("抑郁" in normalized) or ("抑" in normalized):
-        return 1
-    return -1
+    return parse_generated_label(text).get("label", -1)
 
 
 def _label_id_to_name(label_id: int) -> str:
@@ -332,6 +402,102 @@ def _label_id_to_name(label_id: int) -> str:
     if label_id == 1:
         return "depressed"
     return "unknown"
+
+
+def _eval_generation_max_new_tokens(cfg):
+    return max(1, int(getattr(cfg.eval, "max_new_tokens", 16)))
+
+
+def _eval_prediction_log_limit(cfg):
+    return int(getattr(cfg.eval, "print_predictions_limit", 5))
+
+
+def _make_generation_kwargs(metric_processor, cfg):
+    tokenizer = metric_processor.tokenizer
+    kwargs = {
+        "max_new_tokens": _eval_generation_max_new_tokens(cfg),
+        "do_sample": False,
+        "num_beams": 1,
+    }
+    if getattr(tokenizer, "pad_token_id", None) is not None:
+        kwargs["pad_token_id"] = tokenizer.pad_token_id
+    if getattr(tokenizer, "eos_token_id", None) is not None:
+        kwargs["eos_token_id"] = tokenizer.eos_token_id
+    if dist.is_initialized() and dist.get_world_size() > 1:
+        kwargs["synced_gpus"] = True
+    return kwargs
+
+
+def _update_generation_stats(stats: dict, y_true: int, y_pred: int):
+    if y_true == -1:
+        return
+    stats.setdefault("num_invalid_predictions", 0)
+    if y_pred not in {0, 1}:
+        stats["num_invalid_predictions"] += 1
+    update_binary_stats_with_prediction(stats, y_true, y_pred)
+
+
+def _merge_stats_dicts(left, right):
+    if not left:
+        return dict(right or {})
+    merged = dict(left)
+    for key, value in (right or {}).items():
+        if isinstance(value, (int, float)):
+            merged[key] = float(merged.get(key, 0.0)) + float(value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _gather_and_merge_stats_by_dataset(local_stats_by_dataset: dict):
+    gathered = [None for _ in range(dist.get_world_size())]
+    dist.all_gather_object(gathered, local_stats_by_dataset)
+    merged = {}
+    for rank_stats in gathered:
+        for dataset_name, stats in (rank_stats or {}).items():
+            merged[dataset_name] = _merge_stats_dicts(merged.get(dataset_name), stats)
+    return merged
+
+
+def _gather_limited_examples(local_examples, limit: int):
+    gathered = [None for _ in range(dist.get_world_size())]
+    local_payload = list(local_examples if limit <= 0 else local_examples[:limit])
+    dist.all_gather_object(gathered, local_payload)
+    merged = []
+    for rank_examples in gathered:
+        for item in rank_examples or []:
+            merged.append(item)
+            if limit > 0 and len(merged) >= limit:
+                return merged
+    return merged
+
+
+def _split_eval_batch(batch, device):
+    metadata = {}
+    supervised_batch = {}
+    generation_batch = {}
+    for key, value in batch.items():
+        if key.startswith("gen_"):
+            generation_batch[key[4:]] = value.to(device) if isinstance(value, torch.Tensor) else value
+        elif key in {"dataset_names", "segment_keys", "group_ids", "target_texts"}:
+            metadata[key] = value
+        else:
+            supervised_batch[key] = value.to(device) if isinstance(value, torch.Tensor) else value
+    return metadata, supervised_batch, generation_batch
+
+
+def _log_prediction_examples(logger, title: str, predictions, limit: int):
+    if logger is None or limit == 0:
+        return
+    logger.info("%s", title)
+    if not predictions:
+        logger.info("  (none)")
+        return
+    selected = predictions if limit <= 0 else predictions[:limit]
+    for item in selected:
+        logger.info("  %s", json.dumps(item, ensure_ascii=False))
+    if limit > 0 and len(predictions) > limit:
+        logger.info("  ... %s more", len(predictions) - limit)
 
 
 def _extract_debug_texts(metric_processor, batch, logits, sample_idx: int = 0):
@@ -394,10 +560,19 @@ def _prompt_only_generate_text(model, metric_processor, batch, prompt_ids: torch
 
     generate_inputs = _build_prompt_only_generate_inputs(batch, prompt_ids, sample_idx=sample_idx)
     generate_model = model.module if hasattr(model, "module") else model
-    generated = generate_model.generate(
-        **generate_inputs,
-        max_new_tokens=8,
-    )
+    tokenizer = metric_processor.tokenizer
+    generation_kwargs = {
+        "max_new_tokens": 8,
+        "do_sample": False,
+        "num_beams": 1,
+    }
+    if getattr(tokenizer, "pad_token_id", None) is not None:
+        generation_kwargs["pad_token_id"] = tokenizer.pad_token_id
+    if getattr(tokenizer, "eos_token_id", None) is not None:
+        generation_kwargs["eos_token_id"] = tokenizer.eos_token_id
+    if dist.is_initialized() and dist.get_world_size() > 1:
+        generation_kwargs["synced_gpus"] = True
+    generated = generate_model.generate(**generate_inputs, **generation_kwargs)
     generated_suffix = generated[:, prompt_ids.numel() :]
     if generated_suffix.size(0) == 0:
         return ""
@@ -456,8 +631,8 @@ def _maybe_log_model_io_debug(
             debug_texts["prompt_ids"],
             sample_idx=0,
         )
-        parsed_generate_label = _label_id_to_name(_map_label_text_to_id(prompt_only_generate))
-    true_label = _label_id_to_name(_map_label_text_to_id(debug_texts["target_text"]))
+        parsed_generate_label = _label_id_to_name(parse_generated_label(prompt_only_generate)["label"])
+    true_label = _label_id_to_name(map_target_text_to_binary(debug_texts["target_text"]))
     full_input_contains_target = bool(
         debug_texts["target_text"] and debug_texts["target_text"] in debug_texts["full_input_text"]
     )
@@ -550,6 +725,11 @@ def _log_trial_header(logger, trial_name, cfg, world_size, input_mode):
         _model_io_debug_train_every_steps(cfg),
         _model_io_debug_eval_every_calls(cfg),
     )
+    logger.info(
+        "Validation Inference: prompt-only generation (max_new_tokens=%s, prediction_log_limit=%s)",
+        _eval_generation_max_new_tokens(cfg),
+        _eval_prediction_log_limit(cfg),
+    )
     for grouped_dataset_name in sorted(GROUPED_DATASET_NAMES):
         logger.info(
             "%s Eval: level=%s mode=%s threshold=%.4f",
@@ -627,13 +807,26 @@ def _serialize_eval_result(stats: dict, *, mode: str, threshold: float):
     }
 
 
-def _build_best_eval_summary(cfg, eval_loss: float, primary_stats: dict, supplemental_stats_by_dataset: dict):
+def _build_best_eval_summary(
+    cfg,
+    eval_loss: float,
+    primary_stats: dict,
+    supplemental_stats_by_dataset: dict,
+    *,
+    eval_method: str = "prompt_only_generation",
+    segment_level_overall_stats=None,
+    segment_level_stats_by_dataset=None,
+    segment_prediction_examples=None,
+    participant_predictions_by_dataset=None,
+    teacher_forced_summary=None,
+):
     primary_dataset_name = _primary_grouped_person_eval_dataset(cfg)
     primary_mode = _grouped_eval_mode(cfg, primary_dataset_name) if primary_dataset_name else "segment"
     primary_threshold = _grouped_eval_threshold(cfg, primary_dataset_name) if primary_dataset_name else 0.5
     summary = {
         "dataset_name": getattr(cfg.data, "dataset_name", ""),
         "eval_loss": float(eval_loss),
+        "eval_method": eval_method,
         "primary_scope": primary_dataset_name or "overall_segment",
         "primary": _serialize_eval_result(
             primary_stats,
@@ -650,6 +843,33 @@ def _build_best_eval_summary(cfg, eval_loss: float, primary_stats: dict, supplem
             )
             for grouped_dataset_name, stats in sorted(supplemental_stats_by_dataset.items())
         }
+    if segment_level_overall_stats:
+        summary["segment_level"] = {
+            "overall": _serialize_eval_result(
+                segment_level_overall_stats,
+                mode="segment",
+                threshold=0.5,
+            )
+        }
+        if segment_level_stats_by_dataset:
+            summary["segment_level"]["per_dataset"] = {
+                dataset_name: _serialize_eval_result(
+                    stats,
+                    mode="segment",
+                    threshold=0.5,
+                )
+                for dataset_name, stats in sorted(segment_level_stats_by_dataset.items())
+            }
+    if segment_prediction_examples:
+        summary["segment_prediction_examples"] = list(segment_prediction_examples)
+    if participant_predictions_by_dataset:
+        summary["participant_prediction_examples"] = {
+            dataset_name: list(predictions)
+            for dataset_name, predictions in sorted(participant_predictions_by_dataset.items())
+            if predictions
+        }
+    if teacher_forced_summary is not None:
+        summary["teacher_forced_diagnostic"] = teacher_forced_summary
     return summary
 
 
@@ -667,8 +887,13 @@ def _evaluate(
 ):
     eval_loss = 0.0
     eval_steps = 0
-    global_stats = None
-    grouped_local_records = {dataset_name: [] for dataset_name in GROUPED_DATASET_NAMES}
+    teacher_forced_segment_stats = None
+    generation_segment_stats = make_binary_stats()
+    generation_segment_stats["num_invalid_predictions"] = 0
+    generation_per_dataset_segment_stats = {}
+    generation_grouped_local_records = {dataset_name: [] for dataset_name in GROUPED_DATASET_NAMES}
+    teacher_forced_grouped_local_records = {dataset_name: [] for dataset_name in GROUPED_DATASET_NAMES}
+    local_segment_prediction_examples = []
     eval_bar = tqdm(eval_dataloader, desc="[Eval]") if rank == 0 else eval_dataloader
     primary_grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
     supplemental_grouped_datasets = _supplemental_grouped_person_eval_datasets(cfg)
@@ -677,21 +902,20 @@ def _evaluate(
     if primary_grouped_dataset_name:
         datasets_requiring_grouped_records.add(primary_grouped_dataset_name)
     collect_grouped_records = bool(datasets_requiring_grouped_records)
+    generation_kwargs = _make_generation_kwargs(metric_processor, cfg)
+    prediction_log_limit = _eval_prediction_log_limit(cfg)
 
     model.eval()
     with torch.no_grad():
         for _, batch in enumerate(eval_bar):
-            dataset_names = batch.pop("dataset_names", None) if collect_grouped_records else None
-            segment_keys = batch.pop("segment_keys", None) if collect_grouped_records else None
-            group_ids = batch.pop("group_ids", None) if collect_grouped_records else None
-            target_texts = batch.pop("target_texts", None) if collect_grouped_records else None
-            if hasattr(batch, "to"):
-                batch = batch.to(device)
-            else:
-                batch = {key: value.to(device) for key, value in batch.items()}
+            metadata, supervised_batch, generation_batch = _split_eval_batch(batch, device)
+            dataset_names = metadata.get("dataset_names", [])
+            segment_keys = metadata.get("segment_keys", [])
+            group_ids = metadata.get("group_ids", [])
+            target_texts = metadata.get("target_texts", [])
 
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-                outputs = model(**batch)
+                outputs = model(**supervised_batch)
                 loss = outputs.loss
                 _maybe_log_model_io_debug(
                     model,
@@ -699,7 +923,7 @@ def _evaluate(
                     cfg,
                     "eval",
                     metric_processor,
-                    batch,
+                    supervised_batch,
                     outputs.logits,
                     rank=rank,
                     epoch=epoch,
@@ -708,86 +932,185 @@ def _evaluate(
                     loss=float(loss.item()),
                 )
                 if collect_grouped_records:
-                    batch_grouped_records = build_grouped_eval_records(
+                    batch_teacher_forced_records = build_grouped_eval_records(
                         metric_processor.tokenizer,
                         outputs.logits,
-                        batch["labels"],
+                        supervised_batch["labels"],
                         dataset_names,
                         segment_keys,
                         group_ids,
                         target_texts,
                     )
                     for grouped_dataset_name in datasets_requiring_grouped_records:
-                        grouped_local_records[grouped_dataset_name].extend(
-                            batch_grouped_records.get(grouped_dataset_name, [])
+                        teacher_forced_grouped_local_records[grouped_dataset_name].extend(
+                            batch_teacher_forced_records.get(grouped_dataset_name, [])
                         )
-                if not run_primary_grouped_person_eval:
-                    global_stats = compute_metrics_text_binary_accumulate(
-                        metric_processor, outputs.logits, batch["labels"], global_stats
+                teacher_forced_segment_stats = compute_metrics_text_binary_accumulate(
+                    metric_processor,
+                    outputs.logits,
+                    supervised_batch["labels"],
+                    teacher_forced_segment_stats,
+                )
+                generated_ids = (model.module if hasattr(model, "module") else model).generate(
+                    **generation_batch,
+                    **generation_kwargs,
+                )
+
+            prompt_length = generation_batch["input_ids"].shape[1]
+            generated_suffix = generated_ids[:, prompt_length:]
+            generated_texts = metric_processor.tokenizer.batch_decode(
+                generated_suffix,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            for sample_index, generated_text in enumerate(generated_texts):
+                dataset_name = dataset_names[sample_index] if sample_index < len(dataset_names) else ""
+                target_text = target_texts[sample_index] if sample_index < len(target_texts) else ""
+                segment_key = segment_keys[sample_index] if sample_index < len(segment_keys) else None
+                group_id = group_ids[sample_index] if sample_index < len(group_ids) else None
+
+                y_true = map_target_text_to_binary(target_text)
+                parse = parse_generated_label(generated_text)
+                y_pred = parse["label"]
+
+                _update_generation_stats(generation_segment_stats, y_true, y_pred)
+                if dataset_name not in generation_per_dataset_segment_stats:
+                    generation_per_dataset_segment_stats[dataset_name] = make_binary_stats()
+                    generation_per_dataset_segment_stats[dataset_name]["num_invalid_predictions"] = 0
+                _update_generation_stats(generation_per_dataset_segment_stats[dataset_name], y_true, y_pred)
+
+                record = {
+                    "dataset": dataset_name,
+                    "segment_key": segment_key,
+                    "participant_id": group_id,
+                    "target_text": target_text,
+                    "true_label": _label_id_to_name(y_true),
+                    "parsed_label": _label_id_to_name(y_pred),
+                    "raw_generated_text": generated_text,
+                    "normalized_generated_text": parse["normalized_text"],
+                    "matched_pattern": parse["matched_pattern"],
+                    "ambiguous": bool(parse["ambiguous"]),
+                    "parse_reason": parse["parse_reason"],
+                }
+                if prediction_log_limit <= 0 or len(local_segment_prediction_examples) < prediction_log_limit:
+                    local_segment_prediction_examples.append(record)
+
+                if collect_grouped_records and grouped_eval_enabled(dataset_name) and segment_key and group_id:
+                    generation_grouped_local_records[dataset_name].append(
+                        {
+                            "key": segment_key,
+                            "group_id": group_id,
+                            "target_text": target_text,
+                            "pred_label": y_pred,
+                            "depressed_probability": 1.0 if y_pred == 1 else 0.0,
+                            "raw_generated_text": generated_text,
+                            "parse_reason": parse["parse_reason"],
+                            "ambiguous": bool(parse["ambiguous"]),
+                        }
                     )
 
             eval_loss += loss.item()
             eval_steps += 1
-            if rank == 0 and run_primary_grouped_person_eval:
+            if rank == 0 and generation_segment_stats["total"] > 0:
+                temp_acc, _, _, temp_f1, temp_wf1 = compute_metrics_from_stats(generation_segment_stats)
                 eval_bar.set_description(
-                    f"[Eval] loss {loss:.3f} | segments {len(grouped_local_records[primary_grouped_dataset_name])}"
-                )
-            elif rank == 0 and global_stats and global_stats["total"] > 0:
-                temp_acc, _, _, temp_f1, temp_wf1 = compute_metrics_from_stats(global_stats)
-                eval_bar.set_description(
-                    f"[Eval] loss {loss:.3f} | acc {temp_acc:.4f} | posF1 {temp_f1:.4f} | wF1 {temp_wf1:.4f}"
+                    f"[Eval] gen_loss {loss:.3f} | gen_acc {temp_acc:.4f} | gen_posF1 {temp_f1:.4f} | gen_wF1 {temp_wf1:.4f}"
                 )
 
     loss_tensor = torch.tensor([eval_loss, float(eval_steps)], device=device, dtype=torch.float32)
     dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
     reduced_eval_loss = (loss_tensor[0] / loss_tensor[1]).item() if loss_tensor[1] > 0 else 0.0
 
-    supplemental_stats_by_dataset = {}
-    primary_grouped_stats = None
-    if collect_grouped_records:
-        gathered_records = [None for _ in range(dist.get_world_size())]
-        dist.all_gather_object(gathered_records, grouped_local_records)
-        merged_records_by_dataset = {dataset_name: [] for dataset_name in datasets_requiring_grouped_records}
-        for record_group in gathered_records:
-            for grouped_dataset_name in datasets_requiring_grouped_records:
-                merged_records_by_dataset[grouped_dataset_name].extend((record_group or {}).get(grouped_dataset_name, []))
+    generation_per_dataset_segment_stats = _gather_and_merge_stats_by_dataset(generation_per_dataset_segment_stats)
+    generation_segment_stats = _merge_stats_dicts(
+        None,
+        _gather_and_merge_stats_by_dataset({"__overall__": generation_segment_stats}).get("__overall__", make_binary_stats()),
+    )
 
-        for grouped_dataset_name, merged_records in merged_records_by_dataset.items():
+    teacher_forced_segment_stats = _merge_stats_dicts(
+        None,
+        _gather_and_merge_stats_by_dataset({"__overall__": teacher_forced_segment_stats or make_binary_stats()}).get(
+            "__overall__", make_binary_stats()
+        ),
+    )
+    segment_prediction_examples = _gather_limited_examples(local_segment_prediction_examples, prediction_log_limit)
+
+    generation_supplemental_stats_by_dataset = {}
+    generation_primary_stats = dict(generation_segment_stats)
+    generation_segment_level_stats_by_dataset = dict(generation_per_dataset_segment_stats)
+    teacher_forced_supplemental_stats_by_dataset = {}
+    teacher_forced_primary_stats = dict(teacher_forced_segment_stats)
+    participant_predictions_by_dataset = {}
+    if collect_grouped_records:
+        gathered_generation_records = [None for _ in range(dist.get_world_size())]
+        dist.all_gather_object(gathered_generation_records, generation_grouped_local_records)
+        merged_generation_records_by_dataset = {dataset_name: [] for dataset_name in datasets_requiring_grouped_records}
+        for record_group in gathered_generation_records:
+            for grouped_dataset_name in datasets_requiring_grouped_records:
+                merged_generation_records_by_dataset[grouped_dataset_name].extend(
+                    (record_group or {}).get(grouped_dataset_name, [])
+                )
+
+        (
+            generation_per_dataset_after_person,
+            generation_overall_after_person,
+            generation_supplemental_stats_by_dataset,
+            participant_predictions_by_dataset,
+        ) = apply_generated_person_level_results(
+            dataset_name=getattr(cfg.data, "dataset_name", ""),
+            level_by_dataset={dataset_name: _grouped_eval_level(cfg, dataset_name) for dataset_name in GROUPED_DATASET_NAMES},
+            mode_by_dataset={dataset_name: _grouped_eval_mode(cfg, dataset_name) for dataset_name in GROUPED_DATASET_NAMES},
+            threshold_by_dataset={
+                dataset_name: _grouped_eval_threshold(cfg, dataset_name) for dataset_name in GROUPED_DATASET_NAMES
+            },
+            per_dataset_stats=dict(generation_per_dataset_segment_stats),
+            overall_stats=dict(generation_segment_stats),
+            grouped_records_by_dataset=merged_generation_records_by_dataset,
+        )
+        generation_primary_stats = generation_overall_after_person
+
+        gathered_teacher_forced_records = [None for _ in range(dist.get_world_size())]
+        dist.all_gather_object(gathered_teacher_forced_records, teacher_forced_grouped_local_records)
+        merged_teacher_forced_records_by_dataset = {dataset_name: [] for dataset_name in datasets_requiring_grouped_records}
+        for record_group in gathered_teacher_forced_records:
+            for grouped_dataset_name in datasets_requiring_grouped_records:
+                merged_teacher_forced_records_by_dataset[grouped_dataset_name].extend(
+                    (record_group or {}).get(grouped_dataset_name, [])
+                )
+
+        for grouped_dataset_name, merged_records in merged_teacher_forced_records_by_dataset.items():
             stats = aggregate_group_predictions(
                 merged_records,
                 mode=_grouped_eval_mode(cfg, grouped_dataset_name),
                 threshold=_grouped_eval_threshold(cfg, grouped_dataset_name),
             )
             if grouped_dataset_name == primary_grouped_dataset_name:
-                primary_grouped_stats = stats
+                teacher_forced_primary_stats = stats
             elif grouped_dataset_name in supplemental_grouped_datasets:
-                supplemental_stats_by_dataset[grouped_dataset_name] = stats
+                teacher_forced_supplemental_stats_by_dataset[grouped_dataset_name] = stats
 
-    if run_primary_grouped_person_eval:
-        return reduced_eval_loss, primary_grouped_stats, supplemental_stats_by_dataset
-
-    stats_tensor = torch.tensor(
-        [
-            float(global_stats["tp"]) if global_stats else 0.0,
-            float(global_stats["fp"]) if global_stats else 0.0,
-            float(global_stats["fn"]) if global_stats else 0.0,
-            float(global_stats["tn"]) if global_stats else 0.0,
-            float(global_stats["total"]) if global_stats else 0.0,
-            float(global_stats["correct"]) if global_stats else 0.0,
-        ],
-        device=device,
-        dtype=torch.float32,
-    )
-    dist.all_reduce(stats_tensor, op=dist.ReduceOp.SUM)
-    reduced_stats = {
-        "tp": stats_tensor[0].item(),
-        "fp": stats_tensor[1].item(),
-        "fn": stats_tensor[2].item(),
-        "tn": stats_tensor[3].item(),
-        "total": stats_tensor[4].item(),
-        "correct": stats_tensor[5].item(),
+    participant_prediction_examples = {
+        dataset_name: predictions if prediction_log_limit <= 0 else predictions[:prediction_log_limit]
+        for dataset_name, predictions in participant_predictions_by_dataset.items()
     }
-    return reduced_eval_loss, reduced_stats, supplemental_stats_by_dataset
+
+    return {
+        "eval_loss": reduced_eval_loss,
+        "generation": {
+            "primary_stats": generation_primary_stats,
+            "supplemental_stats_by_dataset": generation_supplemental_stats_by_dataset,
+            "segment_level_overall_stats": generation_segment_stats,
+            "segment_level_stats_by_dataset": generation_segment_level_stats_by_dataset,
+            "segment_prediction_examples": segment_prediction_examples,
+            "participant_prediction_examples": participant_prediction_examples,
+            "participant_predictions_by_dataset": participant_predictions_by_dataset,
+        },
+        "teacher_forced": {
+            "primary_stats": teacher_forced_primary_stats,
+            "supplemental_stats_by_dataset": teacher_forced_supplemental_stats_by_dataset,
+            "segment_level_overall_stats": teacher_forced_segment_stats,
+        },
+    }
 
 
 def _finalize_run(logger, trial_name, best_f1, wandb_logger):
@@ -853,21 +1176,13 @@ def train_textonly_ddp(cfg, trial_name=""):
         cfg.data.train_prompt_path,
         task_filename=cfg.data.train_task_filename,
     )
-    if _needs_grouped_eval_metadata(cfg):
-        eval_dataset = TextOnlyEvalDatasetWithMeta(
-            cfg.data.eval_data_path,
-            cfg.data.val_prompt_path,
-            task_filename=cfg.data.eval_task_filename,
-            default_dataset_name=cfg.data.dataset_name,
-        )
-        eval_collate = partial(collate_fn_textonly_with_meta, tokenizer=tokenizer)
-    else:
-        eval_dataset = TextOnlyDataset(
-            cfg.data.eval_data_path,
-            cfg.data.val_prompt_path,
-            task_filename=cfg.data.eval_task_filename,
-        )
-        eval_collate = partial(collate_fn_textonly, tokenizer=tokenizer)
+    eval_dataset = TextOnlyEvalDatasetWithMeta(
+        cfg.data.eval_data_path,
+        cfg.data.val_prompt_path,
+        task_filename=cfg.data.eval_task_filename,
+        default_dataset_name=cfg.data.dataset_name,
+    )
+    eval_collate = partial(collate_fn_textonly_eval_dual, tokenizer=tokenizer)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
@@ -975,7 +1290,7 @@ def train_textonly_ddp(cfg, trial_name=""):
 
             if (train_step + 1) % dynamic_eval_step == 0:
                 next_eval_event_index = eval_step_idx + 1
-                eval_loss, reduced_stats, supplemental_stats_by_dataset = _evaluate(
+                eval_results = _evaluate(
                     model,
                     eval_dataloader,
                     device,
@@ -989,13 +1304,21 @@ def train_textonly_ddp(cfg, trial_name=""):
                 )
                 if rank == 0:
                     eval_step_idx += 1
+                    eval_loss = eval_results["eval_loss"]
+                    generation_stats = eval_results["generation"]["primary_stats"]
+                    generation_supplemental_stats_by_dataset = eval_results["generation"]["supplemental_stats_by_dataset"]
+                    teacher_forced_stats = eval_results["teacher_forced"]["primary_stats"]
+                    teacher_forced_supplemental_stats_by_dataset = eval_results["teacher_forced"]["supplemental_stats_by_dataset"]
                     eval_accuracy, eval_precision, eval_recall, eval_f1, eval_wf1 = compute_metrics_from_stats(
-                        reduced_stats
+                        generation_stats
+                    )
+                    tf_accuracy, tf_precision, tf_recall, tf_f1, tf_wf1 = compute_metrics_from_stats(
+                        teacher_forced_stats
                     )
                     _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
                     grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
                     metric_scope = f"Person ({grouped_dataset_name})" if grouped_dataset_name else "Segment"
-                    logger.info("[Epoch %s Step %s] %s-Level Eval Metrics:", epoch, train_step, metric_scope)
+                    logger.info("[Epoch %s Step %s] generation_eval (%s):", epoch, train_step, metric_scope)
                     logger.info(
                         "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
                         eval_loss,
@@ -1008,15 +1331,26 @@ def train_textonly_ddp(cfg, trial_name=""):
                     if grouped_dataset_name:
                         logger.info(
                             "  Participants: %s, Unique Segments: %s, Mode: %s, Threshold: %.4f",
-                            reduced_stats.get("num_participants", 0),
-                            reduced_stats.get("num_segments", 0),
+                            generation_stats.get("num_participants", 0),
+                            generation_stats.get("num_segments", 0),
                             _grouped_eval_mode(cfg, grouped_dataset_name),
                             _grouped_eval_threshold(cfg, grouped_dataset_name),
                         )
-                    for supplemental_dataset_name, supplemental_stats in supplemental_stats_by_dataset.items():
+                    logger.info("[Epoch %s Step %s] teacher_forced_diagnostic (%s):", epoch, train_step, metric_scope)
+                    logger.info(
+                        "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
+                        eval_loss,
+                        tf_accuracy,
+                        tf_precision,
+                        tf_recall,
+                        tf_f1,
+                        tf_wf1,
+                    )
+                    logger.info("  Generation minus teacher-forced F1 delta: %.4f", eval_f1 - tf_f1)
+                    for supplemental_dataset_name, supplemental_stats in generation_supplemental_stats_by_dataset.items():
                         sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
                         logger.info(
-                            "  Supplemental %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
+                            "  Supplemental generation %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
                             supplemental_dataset_name,
                             sup_acc,
                             sup_prec,
@@ -1028,14 +1362,59 @@ def train_textonly_ddp(cfg, trial_name=""):
                             _grouped_eval_mode(cfg, supplemental_dataset_name),
                             _grouped_eval_threshold(cfg, supplemental_dataset_name),
                         )
+                    for supplemental_dataset_name, supplemental_stats in teacher_forced_supplemental_stats_by_dataset.items():
+                        sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
+                        logger.info(
+                            "  Supplemental teacher-forced %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
+                            supplemental_dataset_name,
+                            sup_acc,
+                            sup_prec,
+                            sup_rec,
+                            sup_f1,
+                            sup_wf1,
+                            supplemental_stats.get("num_participants", 0),
+                            supplemental_stats.get("num_segments", 0),
+                            _grouped_eval_mode(cfg, supplemental_dataset_name),
+                            _grouped_eval_threshold(cfg, supplemental_dataset_name),
+                        )
+                    _log_prediction_examples(
+                        logger,
+                        "[Eval] Segment Predictions",
+                        eval_results["generation"]["segment_prediction_examples"],
+                        _eval_prediction_log_limit(cfg),
+                    )
+                    for grouped_dataset_name_for_examples, participant_examples in sorted(
+                        eval_results["generation"]["participant_prediction_examples"].items()
+                    ):
+                        _log_prediction_examples(
+                            logger,
+                            f"[Eval] Participant Predictions ({grouped_dataset_name_for_examples})",
+                            participant_examples,
+                            _eval_prediction_log_limit(cfg),
+                        )
 
                     if eval_f1 > best_f1:
                         best_f1 = eval_f1
+                        teacher_forced_summary = _build_best_eval_summary(
+                            cfg,
+                            eval_loss,
+                            teacher_forced_stats,
+                            teacher_forced_supplemental_stats_by_dataset,
+                            eval_method="teacher_forced_diagnostic",
+                            segment_level_overall_stats=eval_results["teacher_forced"]["segment_level_overall_stats"],
+                        )
+                        cfg.env.best_teacher_forced_eval_summary = teacher_forced_summary
                         cfg.env.best_eval_summary = _build_best_eval_summary(
                             cfg,
                             eval_loss,
-                            reduced_stats,
-                            supplemental_stats_by_dataset,
+                            generation_stats,
+                            generation_supplemental_stats_by_dataset,
+                            eval_method="prompt_only_generation",
+                            segment_level_overall_stats=eval_results["generation"]["segment_level_overall_stats"],
+                            segment_level_stats_by_dataset=eval_results["generation"]["segment_level_stats_by_dataset"],
+                            segment_prediction_examples=eval_results["generation"]["segment_prediction_examples"],
+                            participant_predictions_by_dataset=eval_results["generation"]["participant_prediction_examples"],
+                            teacher_forced_summary=teacher_forced_summary,
                         )
                         logger.info("[New Best F1] %.4f", eval_f1)
                         best_model_path = os.path.join(cfg.env.save_path, "best_model")
@@ -1049,13 +1428,14 @@ def train_textonly_ddp(cfg, trial_name=""):
                                 {
                                     "eval/loss": eval_loss,
                                     "eval/f1": eval_f1,
+                                    "eval/teacher_forced_f1": tf_f1,
                                     "eval/best_f1": best_f1,
                                     "train/epoch": epoch,
                                     **{
                                         f"eval/{grouped_person_results_key(supplemental_dataset_name)}/f1": float(
                                             compute_metrics_from_stats(supplemental_stats)[3]
                                         )
-                                        for supplemental_dataset_name, supplemental_stats in supplemental_stats_by_dataset.items()
+                                        for supplemental_dataset_name, supplemental_stats in generation_supplemental_stats_by_dataset.items()
                                     },
                                 },
                                 step=global_train_step,
@@ -1117,25 +1497,15 @@ def train_audiotext_ddp(cfg, trial_name=""):
         scp_filename=cfg.data.train_scp_filename,
         task_filename=cfg.data.train_task_filename,
     )
-    if _needs_grouped_eval_metadata(cfg):
-        eval_dataset = AudioEvalDatasetWithMeta(
-            cfg.data.eval_data_path,
-            cfg.data.val_prompt_path,
-            cfg.data.wav_type,
-            scp_filename=cfg.data.eval_scp_filename,
-            task_filename=cfg.data.eval_task_filename,
-            default_dataset_name=cfg.data.dataset_name,
-        )
-        eval_collate = partial(collate_fn_qwen2audio_with_meta, processor=processor)
-    else:
-        eval_dataset = AudioDataset(
-            cfg.data.eval_data_path,
-            cfg.data.val_prompt_path,
-            cfg.data.wav_type,
-            scp_filename=cfg.data.eval_scp_filename,
-            task_filename=cfg.data.eval_task_filename,
-        )
-        eval_collate = partial(collate_fn_qwen2audio, processor=processor)
+    eval_dataset = AudioEvalDatasetWithMeta(
+        cfg.data.eval_data_path,
+        cfg.data.val_prompt_path,
+        cfg.data.wav_type,
+        scp_filename=cfg.data.eval_scp_filename,
+        task_filename=cfg.data.eval_task_filename,
+        default_dataset_name=cfg.data.dataset_name,
+    )
+    eval_collate = partial(collate_fn_qwen2audio_eval_dual, processor=processor)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
@@ -1258,7 +1628,7 @@ def train_audiotext_ddp(cfg, trial_name=""):
 
             if (train_step + 1) % dynamic_eval_step == 0:
                 next_eval_event_index = eval_step_idx + 1
-                eval_loss, reduced_stats, supplemental_stats_by_dataset = _evaluate(
+                eval_results = _evaluate(
                     model,
                     eval_dataloader,
                     device,
@@ -1272,13 +1642,21 @@ def train_audiotext_ddp(cfg, trial_name=""):
                 )
                 if rank == 0:
                     eval_step_idx += 1
+                    eval_loss = eval_results["eval_loss"]
+                    generation_stats = eval_results["generation"]["primary_stats"]
+                    generation_supplemental_stats_by_dataset = eval_results["generation"]["supplemental_stats_by_dataset"]
+                    teacher_forced_stats = eval_results["teacher_forced"]["primary_stats"]
+                    teacher_forced_supplemental_stats_by_dataset = eval_results["teacher_forced"]["supplemental_stats_by_dataset"]
                     eval_accuracy, eval_precision, eval_recall, eval_f1, eval_wf1 = compute_metrics_from_stats(
-                        reduced_stats
+                        generation_stats
+                    )
+                    tf_accuracy, tf_precision, tf_recall, tf_f1, tf_wf1 = compute_metrics_from_stats(
+                        teacher_forced_stats
                     )
                     _report_progress(getattr(cfg.env, "progress_file", ""), eval_step_idx, eval_f1)
                     grouped_dataset_name = _primary_grouped_person_eval_dataset(cfg)
                     metric_scope = f"Person ({grouped_dataset_name})" if grouped_dataset_name else "Segment"
-                    logger.info("[Epoch %s Step %s] %s-Level Eval Metrics:", epoch, train_step, metric_scope)
+                    logger.info("[Epoch %s Step %s] generation_eval (%s):", epoch, train_step, metric_scope)
                     logger.info(
                         "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
                         eval_loss,
@@ -1291,15 +1669,26 @@ def train_audiotext_ddp(cfg, trial_name=""):
                     if grouped_dataset_name:
                         logger.info(
                             "  Participants: %s, Unique Segments: %s, Mode: %s, Threshold: %.4f",
-                            reduced_stats.get("num_participants", 0),
-                            reduced_stats.get("num_segments", 0),
+                            generation_stats.get("num_participants", 0),
+                            generation_stats.get("num_segments", 0),
                             _grouped_eval_mode(cfg, grouped_dataset_name),
                             _grouped_eval_threshold(cfg, grouped_dataset_name),
                         )
-                    for supplemental_dataset_name, supplemental_stats in supplemental_stats_by_dataset.items():
+                    logger.info("[Epoch %s Step %s] teacher_forced_diagnostic (%s):", epoch, train_step, metric_scope)
+                    logger.info(
+                        "  Loss: %.4f, Acc: %.4f, Prec: %.4f, Rec: %.4f, F1: %.4f, wF1: %.4f",
+                        eval_loss,
+                        tf_accuracy,
+                        tf_precision,
+                        tf_recall,
+                        tf_f1,
+                        tf_wf1,
+                    )
+                    logger.info("  Generation minus teacher-forced F1 delta: %.4f", eval_f1 - tf_f1)
+                    for supplemental_dataset_name, supplemental_stats in generation_supplemental_stats_by_dataset.items():
                         sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
                         logger.info(
-                            "  Supplemental %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
+                            "  Supplemental generation %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
                             supplemental_dataset_name,
                             sup_acc,
                             sup_prec,
@@ -1311,14 +1700,59 @@ def train_audiotext_ddp(cfg, trial_name=""):
                             _grouped_eval_mode(cfg, supplemental_dataset_name),
                             _grouped_eval_threshold(cfg, supplemental_dataset_name),
                         )
+                    for supplemental_dataset_name, supplemental_stats in teacher_forced_supplemental_stats_by_dataset.items():
+                        sup_acc, sup_prec, sup_rec, sup_f1, sup_wf1 = compute_metrics_from_stats(supplemental_stats)
+                        logger.info(
+                            "  Supplemental teacher-forced %s Person Eval: Acc %.4f | Prec %.4f | Rec %.4f | F1 %.4f | wF1 %.4f | Participants %s | Segments %s | Mode %s | Threshold %.4f",
+                            supplemental_dataset_name,
+                            sup_acc,
+                            sup_prec,
+                            sup_rec,
+                            sup_f1,
+                            sup_wf1,
+                            supplemental_stats.get("num_participants", 0),
+                            supplemental_stats.get("num_segments", 0),
+                            _grouped_eval_mode(cfg, supplemental_dataset_name),
+                            _grouped_eval_threshold(cfg, supplemental_dataset_name),
+                        )
+                    _log_prediction_examples(
+                        logger,
+                        "[Eval] Segment Predictions",
+                        eval_results["generation"]["segment_prediction_examples"],
+                        _eval_prediction_log_limit(cfg),
+                    )
+                    for grouped_dataset_name_for_examples, participant_examples in sorted(
+                        eval_results["generation"]["participant_prediction_examples"].items()
+                    ):
+                        _log_prediction_examples(
+                            logger,
+                            f"[Eval] Participant Predictions ({grouped_dataset_name_for_examples})",
+                            participant_examples,
+                            _eval_prediction_log_limit(cfg),
+                        )
 
                     if eval_f1 > best_f1:
                         best_f1 = eval_f1
+                        teacher_forced_summary = _build_best_eval_summary(
+                            cfg,
+                            eval_loss,
+                            teacher_forced_stats,
+                            teacher_forced_supplemental_stats_by_dataset,
+                            eval_method="teacher_forced_diagnostic",
+                            segment_level_overall_stats=eval_results["teacher_forced"]["segment_level_overall_stats"],
+                        )
+                        cfg.env.best_teacher_forced_eval_summary = teacher_forced_summary
                         cfg.env.best_eval_summary = _build_best_eval_summary(
                             cfg,
                             eval_loss,
-                            reduced_stats,
-                            supplemental_stats_by_dataset,
+                            generation_stats,
+                            generation_supplemental_stats_by_dataset,
+                            eval_method="prompt_only_generation",
+                            segment_level_overall_stats=eval_results["generation"]["segment_level_overall_stats"],
+                            segment_level_stats_by_dataset=eval_results["generation"]["segment_level_stats_by_dataset"],
+                            segment_prediction_examples=eval_results["generation"]["segment_prediction_examples"],
+                            participant_predictions_by_dataset=eval_results["generation"]["participant_prediction_examples"],
+                            teacher_forced_summary=teacher_forced_summary,
                         )
                         logger.info("[New Best F1] %.4f", eval_f1)
                         best_model_path = os.path.join(cfg.env.save_path, "best_model")
@@ -1334,13 +1768,14 @@ def train_audiotext_ddp(cfg, trial_name=""):
                                 {
                                     "eval/loss": eval_loss,
                                     "eval/f1": eval_f1,
+                                    "eval/teacher_forced_f1": tf_f1,
                                     "eval/best_f1": best_f1,
                                     "train/epoch": epoch,
                                     **{
                                         f"eval/{grouped_person_results_key(supplemental_dataset_name)}/f1": float(
                                             compute_metrics_from_stats(supplemental_stats)[3]
                                         )
-                                        for supplemental_dataset_name, supplemental_stats in supplemental_stats_by_dataset.items()
+                                        for supplemental_dataset_name, supplemental_stats in generation_supplemental_stats_by_dataset.items()
                                     },
                                 },
                                 step=global_train_step,

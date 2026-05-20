@@ -120,6 +120,8 @@ def main():
     cfg.env.debug_model_io_limit = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_LIMIT", "2"))
     cfg.env.debug_model_io_train_every_steps = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS", "1"))
     cfg.env.debug_model_io_eval_every_calls = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS", "1"))
+    cfg.eval.max_new_tokens = int(os.environ.get("AUDIOLLM_EVAL_MAX_NEW_TOKENS", "16"))
+    cfg.eval.print_predictions_limit = int(os.environ.get("AUDIOLLM_EVAL_PRINT_PREDICTIONS_LIMIT", "5"))
     cfg.eval.daic_eval_level, cfg.eval.daic_eval_mode, cfg.eval.daic_person_threshold = grouped_cfg["daic_woz"]
     cfg.eval.eatd_eval_level, cfg.eval.eatd_eval_mode, cfg.eval.eatd_person_threshold = grouped_cfg["eatd"]
     cfg.eval.cmdc_eval_level, cfg.eval.cmdc_eval_mode, cfg.eval.cmdc_person_threshold = grouped_cfg["cmdc"]
@@ -145,6 +147,7 @@ def main():
             "input_mode": input_mode,
             "dataset_name": dataset_name,
             "best_eval_summary": getattr(cfg.env, "best_eval_summary", None),
+            "teacher_forced_eval_summary": getattr(cfg.env, "best_teacher_forced_eval_summary", None),
             "grouped_eval": {
                 grouped_dataset_name: {
                     "level": grouped_cfg[grouped_dataset_name][0],

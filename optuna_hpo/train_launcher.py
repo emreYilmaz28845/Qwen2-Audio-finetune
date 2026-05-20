@@ -196,6 +196,9 @@ def launch_ddp_training(
                 best_eval_summary = results.get("best_eval_summary")
                 if best_eval_summary is not None:
                     trial.set_user_attr("best_eval_summary", best_eval_summary)
+                teacher_forced_eval_summary = results.get("teacher_forced_eval_summary")
+                if teacher_forced_eval_summary is not None:
+                    trial.set_user_attr("teacher_forced_eval_summary", teacher_forced_eval_summary)
         else:
             print(f"Warning: Result file not found at {result_file}")
             best_f1 = -1.0

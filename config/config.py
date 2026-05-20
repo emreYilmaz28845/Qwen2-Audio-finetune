@@ -37,6 +37,8 @@ class EvalConfig:
     batch_size: int = 2
     local_rank : int = 0
     peft_path: str = ""
+    max_new_tokens: int = 16
+    print_predictions_limit: int = 5
     daic_eval_level: str = "person"
     daic_eval_mode: str = "majority_vote"
     daic_person_threshold: float = 0.5
