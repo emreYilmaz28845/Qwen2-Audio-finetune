@@ -282,10 +282,25 @@ def _model_io_debug_limit(cfg) -> int:
     return max(0, int(getattr(cfg.env, "debug_model_io_limit", 2)))
 
 
+def _model_io_debug_train_every_steps(cfg) -> int:
+    return max(1, int(getattr(cfg.env, "debug_model_io_train_every_steps", 1)))
+
+
+def _model_io_debug_eval_every_calls(cfg) -> int:
+    return max(1, int(getattr(cfg.env, "debug_model_io_eval_every_calls", 1)))
+
+
 def _model_io_debug_state(cfg) -> dict:
     state = getattr(cfg.env, "_model_io_debug_state", None)
     if state is None:
-        state = {"train": 0, "eval": 0}
+        state = {
+            "train": 0,
+            "eval": 0,
+            "last_logged_event": {
+                "train": None,
+                "eval": None,
+            },
+        }
         cfg.env._model_io_debug_state = state
     return state
 
@@ -300,6 +315,23 @@ def _decode_ids(tokenizer, token_ids, *, skip_special_tokens: bool):
         skip_special_tokens=skip_special_tokens,
         clean_up_tokenization_spaces=False,
     )
+
+
+def _map_label_text_to_id(text: str) -> int:
+    normalized = (text or "").strip()
+    if ("非抑郁" in normalized) or ("健康" in normalized):
+        return 0
+    if ("抑郁" in normalized) or ("抑" in normalized):
+        return 1
+    return -1
+
+
+def _label_id_to_name(label_id: int) -> str:
+    if label_id == 0:
+        return "non_depressed"
+    if label_id == 1:
+        return "depressed"
+    return "unknown"
 
 
 def _extract_debug_texts(metric_processor, batch, logits, sample_idx: int = 0):
@@ -331,10 +363,53 @@ def _extract_debug_texts(metric_processor, batch, logits, sample_idx: int = 0):
         "target_text": _decode_ids(tokenizer, true_ids, skip_special_tokens=True),
         "predicted_text": _decode_ids(tokenizer, pred_ids, skip_special_tokens=True),
         "supervised_token_count": int(label_indices.numel()),
+        "prompt_ids": prompt_ids.detach().clone(),
+        "prompt_length": int(prompt_ids.numel()),
     }
 
 
+def _build_prompt_only_generate_inputs(batch, prompt_ids: torch.Tensor, sample_idx: int = 0):
+    generate_inputs = {}
+    for key, value in batch.items():
+        if key == "labels":
+            continue
+        if not isinstance(value, torch.Tensor):
+            continue
+        if key == "input_ids":
+            generate_inputs[key] = prompt_ids.unsqueeze(0)
+        elif key == "attention_mask":
+            generate_inputs[key] = torch.ones(
+                (1, prompt_ids.numel()),
+                dtype=value.dtype,
+                device=value.device,
+            )
+        else:
+            generate_inputs[key] = value[sample_idx : sample_idx + 1]
+    return generate_inputs
+
+
+def _prompt_only_generate_text(model, metric_processor, batch, prompt_ids: torch.Tensor, sample_idx: int = 0) -> str:
+    if prompt_ids.numel() == 0:
+        return ""
+
+    generate_inputs = _build_prompt_only_generate_inputs(batch, prompt_ids, sample_idx=sample_idx)
+    generate_model = model.module if hasattr(model, "module") else model
+    generated = generate_model.generate(
+        **generate_inputs,
+        max_new_tokens=8,
+    )
+    generated_suffix = generated[:, prompt_ids.numel() :]
+    if generated_suffix.size(0) == 0:
+        return ""
+    return metric_processor.tokenizer.batch_decode(
+        generated_suffix,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0]
+
+
 def _maybe_log_model_io_debug(
+    model,
     logger,
     cfg,
     phase: str,
@@ -345,6 +420,7 @@ def _maybe_log_model_io_debug(
     rank: int,
     epoch: int,
     step: int,
+    event_index: int,
     loss: float,
 ):
     if logger is None or rank != 0 or not _model_io_debug_enabled(cfg):
@@ -355,16 +431,49 @@ def _maybe_log_model_io_debug(
         return
     if "input_ids" not in batch or "labels" not in batch:
         return
+    if event_index <= 0:
+        return
+
+    if phase == "train":
+        interval = _model_io_debug_train_every_steps(cfg)
+    else:
+        interval = _model_io_debug_eval_every_calls(cfg)
+    if (event_index - 1) % interval != 0:
+        return
+    if state["last_logged_event"].get(phase) == event_index:
+        return
 
     debug_texts = _extract_debug_texts(metric_processor, batch, logits, sample_idx=0)
     state[phase] = state.get(phase, 0) + 1
+    state["last_logged_event"][phase] = event_index
+    prompt_only_generate = ""
+    parsed_generate_label = "unknown"
+    if phase == "eval":
+        prompt_only_generate = _prompt_only_generate_text(
+            model,
+            metric_processor,
+            batch,
+            debug_texts["prompt_ids"],
+            sample_idx=0,
+        )
+        parsed_generate_label = _label_id_to_name(_map_label_text_to_id(prompt_only_generate))
+    true_label = _label_id_to_name(_map_label_text_to_id(debug_texts["target_text"]))
+    full_input_contains_target = bool(
+        debug_texts["target_text"] and debug_texts["target_text"] in debug_texts["full_input_text"]
+    )
 
     logger.info("[Model IO Debug][%s #%s] epoch=%s step=%s loss=%.4f", phase.upper(), state[phase], epoch, step, loss)
-    logger.info("  Prompt: %r", debug_texts["prompt_text"])
-    logger.info("  Full Input: %r", debug_texts["full_input_text"])
-    logger.info("  Target: %r", debug_texts["target_text"])
-    logger.info("  Output: %r", debug_texts["predicted_text"])
-    logger.info("  Supervised Tokens: %s", debug_texts["supervised_token_count"])
+    logger.info("  PHASE=%s", phase)
+    logger.info("  prompt=%r", debug_texts["prompt_text"])
+    logger.info("  full_model_input=%r", debug_texts["full_input_text"])
+    logger.info("  input_contains_target=%s", full_input_contains_target)
+    logger.info("  target_label=%r", debug_texts["target_text"])
+    logger.info("  label_span_prediction=%r", debug_texts["predicted_text"])
+    if phase == "eval":
+        logger.info("  prompt_only_generate=%r", prompt_only_generate)
+        logger.info("  parsed_generate_label=%s", parsed_generate_label)
+    logger.info("  true_label=%s", true_label)
+    logger.info("  supervised_tokens=%s", debug_texts["supervised_token_count"])
 
 
 def _setup_run(cfg, trial_name):
@@ -435,6 +544,11 @@ def _log_trial_header(logger, trial_name, cfg, world_size, input_mode):
         "Model IO Debug: %s (limit per phase=%s)",
         _model_io_debug_enabled(cfg),
         _model_io_debug_limit(cfg),
+    )
+    logger.info(
+        "Model IO Debug Intervals: train_every_steps=%s eval_every_calls=%s",
+        _model_io_debug_train_every_steps(cfg),
+        _model_io_debug_eval_every_calls(cfg),
     )
     for grouped_dataset_name in sorted(GROUPED_DATASET_NAMES):
         logger.info(
@@ -539,7 +653,18 @@ def _build_best_eval_summary(cfg, eval_loss: float, primary_stats: dict, supplem
     return summary
 
 
-def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg, logger=None, epoch=-1, step=-1):
+def _evaluate(
+    model,
+    eval_dataloader,
+    device,
+    metric_processor,
+    rank,
+    cfg,
+    logger=None,
+    epoch=-1,
+    step=-1,
+    eval_event_index=-1,
+):
     eval_loss = 0.0
     eval_steps = 0
     global_stats = None
@@ -569,6 +694,7 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg, logge
                 outputs = model(**batch)
                 loss = outputs.loss
                 _maybe_log_model_io_debug(
+                    model,
                     logger,
                     cfg,
                     "eval",
@@ -578,6 +704,7 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg, logge
                     rank=rank,
                     epoch=epoch,
                     step=step,
+                    event_index=eval_event_index,
                     loss=float(loss.item()),
                 )
                 if collect_grouped_records:
@@ -819,6 +946,7 @@ def train_textonly_ddp(cfg, trial_name=""):
                 loss = outputs.loss
                 acc = compute_acc_text(metric_processor, outputs.logits, batch["labels"])
                 _maybe_log_model_io_debug(
+                    model,
                     logger,
                     cfg,
                     "train",
@@ -828,6 +956,7 @@ def train_textonly_ddp(cfg, trial_name=""):
                     rank=rank,
                     epoch=epoch,
                     step=train_step,
+                    event_index=global_train_step,
                     loss=float(loss.item()),
                 )
 
@@ -845,8 +974,18 @@ def train_textonly_ddp(cfg, trial_name=""):
                 )
 
             if (train_step + 1) % dynamic_eval_step == 0:
+                next_eval_event_index = eval_step_idx + 1
                 eval_loss, reduced_stats, supplemental_stats_by_dataset = _evaluate(
-                    model, eval_dataloader, device, metric_processor, rank, cfg, logger=logger, epoch=epoch, step=train_step
+                    model,
+                    eval_dataloader,
+                    device,
+                    metric_processor,
+                    rank,
+                    cfg,
+                    logger=logger,
+                    epoch=epoch,
+                    step=train_step,
+                    eval_event_index=next_eval_event_index,
                 )
                 if rank == 0:
                     eval_step_idx += 1
@@ -1091,6 +1230,7 @@ def train_audiotext_ddp(cfg, trial_name=""):
                 loss = outputs.loss
                 acc = compute_acc_text(processor, outputs.logits, batch["labels"])
                 _maybe_log_model_io_debug(
+                    model,
                     logger,
                     cfg,
                     "train",
@@ -1100,6 +1240,7 @@ def train_audiotext_ddp(cfg, trial_name=""):
                     rank=rank,
                     epoch=epoch,
                     step=train_step,
+                    event_index=global_train_step,
                     loss=float(loss.item()),
                 )
 
@@ -1116,8 +1257,18 @@ def train_audiotext_ddp(cfg, trial_name=""):
                 )
 
             if (train_step + 1) % dynamic_eval_step == 0:
+                next_eval_event_index = eval_step_idx + 1
                 eval_loss, reduced_stats, supplemental_stats_by_dataset = _evaluate(
-                    model, eval_dataloader, device, processor, rank, cfg, logger=logger, epoch=epoch, step=train_step
+                    model,
+                    eval_dataloader,
+                    device,
+                    processor,
+                    rank,
+                    cfg,
+                    logger=logger,
+                    epoch=epoch,
+                    step=train_step,
+                    eval_event_index=next_eval_event_index,
                 )
                 if rank == 0:
                     eval_step_idx += 1

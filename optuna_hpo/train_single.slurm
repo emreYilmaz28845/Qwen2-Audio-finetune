@@ -29,10 +29,13 @@ export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
 export NUM_GPUS="${NUM_GPUS:-4}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
+export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export AUDIOLLM_ENABLE_GPU_LOG="${AUDIOLLM_ENABLE_GPU_LOG:-1}"
 export AUDIOLLM_GPU_LOG_INTERVAL_SEC="${AUDIOLLM_GPU_LOG_INTERVAL_SEC:-60}"
 export AUDIOLLM_ENABLE_MODEL_IO_DEBUG="${AUDIOLLM_ENABLE_MODEL_IO_DEBUG:-0}"
 export AUDIOLLM_MODEL_IO_DEBUG_LIMIT="${AUDIOLLM_MODEL_IO_DEBUG_LIMIT:-2}"
+export AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS="${AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS:-1}"
+export AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS="${AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS:-1}"
 
 case "$MODEL_FAMILY" in
     audio)
@@ -113,8 +116,9 @@ echo "LoRA R: $LORA_R" | tee -a "$LOG_FILE"
 echo "LoRA Alpha: $LORA_ALPHA" | tee -a "$LOG_FILE"
 echo "Model Path: $MODEL_PATH" | tee -a "$LOG_FILE"
 echo "Save Path: $SAVE_PATH" | tee -a "$LOG_FILE"
+echo "TOKENIZERS_PARALLELISM: $TOKENIZERS_PARALLELISM" | tee -a "$LOG_FILE"
 echo "GPU Log: $AUDIOLLM_ENABLE_GPU_LOG (interval=${AUDIOLLM_GPU_LOG_INTERVAL_SEC}s)" | tee -a "$LOG_FILE"
-echo "Model IO Debug: $AUDIOLLM_ENABLE_MODEL_IO_DEBUG (limit per phase=${AUDIOLLM_MODEL_IO_DEBUG_LIMIT})" | tee -a "$LOG_FILE"
+echo "Model IO Debug: $AUDIOLLM_ENABLE_MODEL_IO_DEBUG (limit per phase=${AUDIOLLM_MODEL_IO_DEBUG_LIMIT}, train_every_steps=${AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS}, eval_every_calls=${AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS})" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 

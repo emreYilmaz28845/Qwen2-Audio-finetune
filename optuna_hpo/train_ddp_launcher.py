@@ -118,6 +118,8 @@ def main():
     cfg.env.stop_file = stop_file or ""
     cfg.env.debug_model_io = env_flag("AUDIOLLM_ENABLE_MODEL_IO_DEBUG", "0")
     cfg.env.debug_model_io_limit = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_LIMIT", "2"))
+    cfg.env.debug_model_io_train_every_steps = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS", "1"))
+    cfg.env.debug_model_io_eval_every_calls = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS", "1"))
     cfg.eval.daic_eval_level, cfg.eval.daic_eval_mode, cfg.eval.daic_person_threshold = grouped_cfg["daic_woz"]
     cfg.eval.eatd_eval_level, cfg.eval.eatd_eval_mode, cfg.eval.eatd_person_threshold = grouped_cfg["eatd"]
     cfg.eval.cmdc_eval_level, cfg.eval.cmdc_eval_mode, cfg.eval.cmdc_person_threshold = grouped_cfg["cmdc"]

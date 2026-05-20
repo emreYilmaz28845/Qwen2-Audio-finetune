@@ -44,6 +44,8 @@ Supported user-facing variables:
 - `PRUNER_INTERVAL_STEPS=<int>`
 - `AUDIOLLM_ENABLE_MODEL_IO_DEBUG=1|0`
 - `AUDIOLLM_MODEL_IO_DEBUG_LIMIT=<int>`
+- `AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS=<int>`
+- `AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS=<int>`
 
 Allowed mode combinations:
 
@@ -77,6 +79,8 @@ Supported user-facing variables:
 - `PRUNER_INTERVAL_STEPS=<int>`
 - `AUDIOLLM_ENABLE_MODEL_IO_DEBUG=1|0`
 - `AUDIOLLM_MODEL_IO_DEBUG_LIMIT=<int>`
+- `AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS=<int>`
+- `AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS=<int>`
 
 ### Single manual trial
 
@@ -94,6 +98,8 @@ Supported user-facing variables:
 - explicit hyperparameters: `lr`, `batch_size`, `lora_r`, `lora_alpha`
 - `AUDIOLLM_ENABLE_MODEL_IO_DEBUG=1|0`
 - `AUDIOLLM_MODEL_IO_DEBUG_LIMIT=<int>`
+- `AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS=<int>`
+- `AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS=<int>`
 
 ## Prompt and Task Files
 
@@ -388,6 +394,12 @@ Relevant env vars:
 
 - `AUDIOLLM_ENABLE_MODEL_IO_DEBUG=1|0`
 - `AUDIOLLM_MODEL_IO_DEBUG_LIMIT=<int>`
+- `AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS=<int>`
+- `AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS=<int>`
+
+Useful companion env var for the tokenizer fork warning:
+
+- `TOKENIZERS_PARALLELISM=false`
 
 When enabled, rank 0 logs a small number of decoded examples for both `train` and `eval`:
 
@@ -395,6 +407,12 @@ When enabled, rank 0 logs a small number of decoded examples for both `train` an
 - full decoded model input
 - decoded target label span
 - decoded predicted output span
+
+Cadence controls:
+
+- `AUDIOLLM_MODEL_IO_DEBUG_LIMIT`: total number of debug samples per phase
+- `AUDIOLLM_MODEL_IO_DEBUG_TRAIN_EVERY_STEPS`: log every Nth train step
+- `AUDIOLLM_MODEL_IO_DEBUG_EVAL_EVERY_CALLS`: log every Nth eval event
 
 ## Trial Launch Chain
 
