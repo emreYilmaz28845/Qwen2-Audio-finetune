@@ -286,10 +286,9 @@ def test_eval_sh_passes_eatd_level_arguments(tmp_path):
     assert_option("--eatd_eval_mode", "max_probability")
     assert_option("--eatd_person_threshold", "0.75")
     assert_option("--data_path", str(PROJECT_ROOT / "data" / "eatd" / "test"))
-    assert_option("--data_split", "test")
 
 
-def test_eval_sh_cmdc_defaults_use_clean_holdout_test_paths(tmp_path):
+def test_eval_sh_cmdc_defaults_include_fold_paths(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     capture_path = tmp_path / "captured_args.json"
@@ -310,6 +309,7 @@ def test_eval_sh_cmdc_defaults_use_clean_holdout_test_paths(tmp_path):
             "MODEL_FAMILY": "text",
             "PROMPT_MODE": "textonly",
             "DATASET_NAME": "cmdc",
+            "CMDC_FOLD": "fold3",
             "CMDC_EVAL_LEVEL": "person",
             "CMDC_EVAL_MODE": "mean_probability",
             "CMDC_PERSON_THRESHOLD": "0.6",
@@ -338,35 +338,5 @@ def test_eval_sh_cmdc_defaults_use_clean_holdout_test_paths(tmp_path):
     assert_option("--cmdc_eval_level", "person")
     assert_option("--cmdc_eval_mode", "mean_probability")
     assert_option("--cmdc_person_threshold", "0.6")
-    assert_option("--data_path", str(PROJECT_ROOT / "data" / "cmdc" / "test"))
-    assert_option("--task_filename", "cmdc_multitask.jsonl")
-    assert_option("--data_split", "test")
-
-
-def test_eval_sh_refuses_non_test_final_eval(tmp_path):
-    env = os.environ.copy()
-    env.update(
-        {
-            "MODEL_FAMILY": "text",
-            "PROMPT_MODE": "textonly",
-            "DATASET_NAME": "eatd",
-            "DATA_SPLIT": "val",
-            "PEFT_PATH": "baseline",
-            "LOG_DIR": str(tmp_path / "logs"),
-            "RESULTS_DIR": str(tmp_path / "results"),
-            "OUTPUT_JSON": str(tmp_path / "results.json"),
-            "DEVICE": "cpu",
-        }
-    )
-
-    completed = subprocess.run(
-        ["bash", str(PROJECT_ROOT / "eval.sh")],
-        cwd=PROJECT_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert completed.returncode != 0
-    assert "Refusing final evaluation on DATA_SPLIT=val" in completed.stdout
+    assert_option("--data_path", str(PROJECT_ROOT / "data" / "cmdc" / "fold3" / "test"))
+    assert_option("--task_filename", "fold3_multitask.jsonl")

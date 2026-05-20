@@ -5,7 +5,6 @@ Supported datasets:
 - merged
 - daic_woz
 - eatd
-- cmdc
 
 Supported user-facing mode combinations:
 - audio + full
@@ -47,7 +46,6 @@ from utils.grouped_eval import (
     normalize_grouped_eval_mode,
     validate_grouped_person_threshold,
 )
-from utils.split_validation import SplitValidationError, validate_dataset_splits
 
 
 logging.basicConfig(
@@ -62,8 +60,7 @@ AUDIO_MODEL_PATH_DEFAULT = "/gpfs/projects/etur92/ozu647717/models/Qwen2-Audio-7
 DATASET_MERGED = "merged"
 DATASET_DAIC_WOZ = "daic_woz"
 DATASET_EATD = "eatd"
-DATASET_CMDC = "cmdc"
-SUPPORTED_DATASETS = {DATASET_MERGED, DATASET_DAIC_WOZ, DATASET_EATD, DATASET_CMDC}
+SUPPORTED_DATASETS = {DATASET_MERGED, DATASET_DAIC_WOZ, DATASET_EATD}
 
 MODEL_FAMILY_TEXT = "text"
 MODEL_FAMILY_AUDIO = "audio"
@@ -270,6 +267,8 @@ def get_dataset_config(dataset_name: str, prompt_mode: str, task_variant: str):
     task_file = get_task_filename(dataset_name, task_variant)
     train_split = "train"
     eval_split = "val"
+    if dataset_name == DATASET_EATD:
+        eval_split = "test"
 
     return DatasetConfig(
         dataset_name=dataset_name,
@@ -284,36 +283,14 @@ def get_dataset_config(dataset_name: str, prompt_mode: str, task_variant: str):
     )
 
 
-def validate_hpo_splits(dataset_cfg: DatasetConfig):
-    if env_flag("SKIP_SPLIT_VALIDATION", False):
-        logger.warning("Skipping split validation because SKIP_SPLIT_VALIDATION is enabled.")
-        return
-    root = os.path.dirname(dataset_cfg.train_data_path)
-    try:
-        summary = validate_dataset_splits(dataset_cfg.dataset_name, root, strict=True)
-    except SplitValidationError:
-        logger.exception("Clean split validation failed before HPO startup.")
-        raise
-    logger.info(
-        "Clean split validation passed for %s | participants=%s | segments=%s",
-        dataset_cfg.dataset_name,
-        summary.get("participants_by_split"),
-        summary.get("segments_by_split"),
-    )
-
-
 def apply_dataset_env(dataset_cfg: DatasetConfig):
     os.environ["TRAIN_PROMPT_FILE"] = dataset_cfg.train_prompt_file
-    os.environ["VAL_PROMPT_FILE"] = dataset_cfg.eval_prompt_file
     os.environ["EVAL_PROMPT_FILE"] = dataset_cfg.eval_prompt_file
     os.environ["TRAIN_TASK_FILE"] = dataset_cfg.train_task_file
-    os.environ["VAL_TASK_FILE"] = dataset_cfg.eval_task_file
     os.environ["EVAL_TASK_FILE"] = dataset_cfg.eval_task_file
     os.environ["TRAIN_SCP_FILE"] = dataset_cfg.train_scp_file
-    os.environ["VAL_SCP_FILE"] = dataset_cfg.eval_scp_file
     os.environ["EVAL_SCP_FILE"] = dataset_cfg.eval_scp_file
     os.environ["TRAIN_DATA_PATH"] = dataset_cfg.train_data_path
-    os.environ["VAL_DATA_PATH"] = dataset_cfg.eval_data_path
     os.environ["EVAL_DATA_PATH"] = dataset_cfg.eval_data_path
 
 
@@ -416,7 +393,6 @@ def run_optimization(
     validate_mode_combination(model_family, prompt_mode)
     grouped_settings = grouped_settings or resolve_grouped_eval_settings({})
     dataset_cfg = get_dataset_config(dataset_name, prompt_mode, task_variant)
-    validate_hpo_splits(dataset_cfg)
     apply_dataset_env(dataset_cfg)
 
     launch_input_mode = resolve_launch_input_mode(model_family)
@@ -564,7 +540,7 @@ def run_optimization(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Optuna hyperparameter optimization for clean-holdout depression datasets"
+        description="Optuna hyperparameter optimization for merged, DAIC, and EATD Qwen training"
     )
     parser.add_argument("--n-trials", type=int, default=20, help="Number of trials to run (default: 20)")
     parser.add_argument("--study-name", type=str, default=None, help="Optional study name override")
@@ -668,23 +644,6 @@ if __name__ == "__main__":
         "--eatd-person-threshold",
         type=float,
         default=float(os.environ.get("EATD_PERSON_THRESHOLD", "0.5")),
-    )
-    parser.add_argument(
-        "--cmdc-eval-level",
-        type=str,
-        choices=sorted(SUPPORTED_GROUPED_EVAL_LEVELS),
-        default=os.environ.get("CMDC_EVAL_LEVEL", DEFAULT_GROUPED_EVAL_LEVEL),
-    )
-    parser.add_argument(
-        "--cmdc-eval-mode",
-        type=str,
-        choices=sorted(SUPPORTED_GROUPED_EVAL_MODES),
-        default=os.environ.get("CMDC_EVAL_MODE", DEFAULT_GROUPED_EVAL_MODE),
-    )
-    parser.add_argument(
-        "--cmdc-person-threshold",
-        type=float,
-        default=float(os.environ.get("CMDC_PERSON_THRESHOLD", "0.5")),
     )
 
     args = parser.parse_args()

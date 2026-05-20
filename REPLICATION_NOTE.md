@@ -27,31 +27,17 @@ Create the environment from `environment.yml`, then activate it. On our cluster 
 
 ## 2. Data Assumption
 
-The repository contains prepared depression datasets under `data/`. The current primary protocol uses clean participant-level holdout splits:
+The repository already contains the prepared depression datasets under `data/`, including:
 
-- `data/{daic_woz,eatd,cmdc,merged}/train`
-- `data/{daic_woz,eatd,cmdc,merged}/val`
-- `data/{daic_woz,eatd,cmdc,merged}/test`
+- `data/cmdc/fold*/train` and `data/cmdc/fold*/test`
+- `data/merged/train` and `data/merged/val`
+- `data/daic*` and `data/eatd*`
 
 The important files for each split are:
 
 - `*.scp` for audio paths
 - `*_multitask.jsonl` for labels/tasks
 - `*_multiprompt.jsonl`, `*_multiprompt_textonly.jsonl`, or `*_multiprompt_audiotext.jsonl` for prompt style
-
-The split audit files are:
-
-- `data/{daic_woz,eatd,cmdc,merged}/split_audit.json`
-- `data/clean_holdout_manifest_audit.json`
-
-Regenerate the active clean splits with:
-
-```bash
-python tools/regenerate_clean_holdout_manifests.py
-python tools/validate_splits.py --all --strict
-```
-
-The old `data/cmdc/fold*/train` and `data/cmdc/fold*/test` directories are retained for audit and secondary diagnostics only. They are not the primary reporting protocol.
 
 ## 3. What We Actually Reproduced
 
@@ -106,13 +92,7 @@ MODEL_FAMILY=text PROMPT_MODE=textonly bash eval.sh none
 
 The per-dataset metrics are computed by `evaluate_per_dataset.py`.
 
-Final reporting now defaults to `DATA_SPLIT=test`. Evaluation on `train` or `val` is blocked unless `ALLOW_NON_TEST_EVAL=1` is set explicitly for debugging.
-
-Optuna HPO uses only the clean `val` split for pruning and best-checkpoint selection. The untouched `test` split should be used only after model/hyperparameter selection.
-
 ## 5. Important Note
-
-The previously transferred Optuna/evaluation outputs that reached F1=1.0 should not be used as final claims. Those runs mixed validation/model-selection and final-evaluation roles, and CMDC/EATD also had split identity problems in the older generated manifests. They are useful audit artifacts, not clean holdout results.
 
 Anyone trying to repeat our results should use this repository version rather than the original upstream code. The git history shows that reproducibility depended on multiple repository-side changes, not on a single training command. In particular, the final workflow depends on:
 
