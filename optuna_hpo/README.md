@@ -42,6 +42,8 @@ Supported user-facing variables:
 - `PRUNER_STARTUP_TRIALS=<int>`
 - `PRUNER_WARMUP_STEPS=<int>`
 - `PRUNER_INTERVAL_STEPS=<int>`
+- `AUDIOLLM_ENABLE_MODEL_IO_DEBUG=1|0`
+- `AUDIOLLM_MODEL_IO_DEBUG_LIMIT=<int>`
 
 Allowed mode combinations:
 
@@ -73,6 +75,8 @@ Supported user-facing variables:
 - `PRUNER_STARTUP_TRIALS=<int>`
 - `PRUNER_WARMUP_STEPS=<int>`
 - `PRUNER_INTERVAL_STEPS=<int>`
+- `AUDIOLLM_ENABLE_MODEL_IO_DEBUG=1|0`
+- `AUDIOLLM_MODEL_IO_DEBUG_LIMIT=<int>`
 
 ### Single manual trial
 
@@ -88,6 +92,8 @@ Supported user-facing variables:
 - `PROMPT_MODE=full|audiotext|textonly`
 - `TASK_VARIANT=default|filtered`
 - explicit hyperparameters: `lr`, `batch_size`, `lora_r`, `lora_alpha`
+- `AUDIOLLM_ENABLE_MODEL_IO_DEBUG=1|0`
+- `AUDIOLLM_MODEL_IO_DEBUG_LIMIT=<int>`
 
 ## Prompt and Task Files
 
@@ -369,6 +375,26 @@ Logged values:
 - VRAM total MB
 - VRAM used percent
 - GPU utilization percent
+
+## Model IO Debug
+
+Model input/output debug logging is available in the cluster scripts:
+
+- `train_hpo.slurm`
+- `train_hpo_cmdc_cv_5fold.slurm`
+- `train_single.slurm`
+
+Relevant env vars:
+
+- `AUDIOLLM_ENABLE_MODEL_IO_DEBUG=1|0`
+- `AUDIOLLM_MODEL_IO_DEBUG_LIMIT=<int>`
+
+When enabled, rank 0 logs a small number of decoded examples for both `train` and `eval`:
+
+- prompt text
+- full decoded model input
+- decoded target label span
+- decoded predicted output span
 
 ## Trial Launch Chain
 

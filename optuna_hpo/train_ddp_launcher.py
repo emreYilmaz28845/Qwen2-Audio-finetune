@@ -37,6 +37,10 @@ def derive_input_mode(model_family: str):
     return "textonly"
 
 
+def env_flag(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _grouped_eval_values(config_data, dataset_name: str):
     prefix = dataset_name.upper()
     return (
@@ -112,6 +116,8 @@ def main():
     cfg.data.wav_type = wav_type
     cfg.env.progress_file = progress_file or ""
     cfg.env.stop_file = stop_file or ""
+    cfg.env.debug_model_io = env_flag("AUDIOLLM_ENABLE_MODEL_IO_DEBUG", "0")
+    cfg.env.debug_model_io_limit = int(os.environ.get("AUDIOLLM_MODEL_IO_DEBUG_LIMIT", "2"))
     cfg.eval.daic_eval_level, cfg.eval.daic_eval_mode, cfg.eval.daic_person_threshold = grouped_cfg["daic_woz"]
     cfg.eval.eatd_eval_level, cfg.eval.eatd_eval_mode, cfg.eval.eatd_person_threshold = grouped_cfg["eatd"]
     cfg.eval.cmdc_eval_level, cfg.eval.cmdc_eval_mode, cfg.eval.cmdc_person_threshold = grouped_cfg["cmdc"]

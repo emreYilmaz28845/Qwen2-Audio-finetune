@@ -154,6 +154,8 @@ export NUM_GPUS="${NUM_GPUS:-4}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export AUDIOLLM_ENABLE_GPU_LOG="${AUDIOLLM_ENABLE_GPU_LOG:-1}"
 export AUDIOLLM_GPU_LOG_INTERVAL_SEC="${AUDIOLLM_GPU_LOG_INTERVAL_SEC:-60}"
+export AUDIOLLM_ENABLE_MODEL_IO_DEBUG="${AUDIOLLM_ENABLE_MODEL_IO_DEBUG:-0}"
+export AUDIOLLM_MODEL_IO_DEBUG_LIMIT="${AUDIOLLM_MODEL_IO_DEBUG_LIMIT:-2}"
 
 export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/${LOG_DIR_NAME}${DATASET_LEVEL_SUFFIX}}"
 export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/${STORAGE_DIR_NAME}${DATASET_LEVEL_SUFFIX}}"
@@ -203,6 +205,7 @@ echo "Log Dir: $LOG_DIR" | tee -a "$LOG_FILE"
 echo "Storage Path: $STORAGE_PATH" | tee -a "$LOG_FILE"
 echo "Save Path: $SAVE_PATH" | tee -a "$LOG_FILE"
 echo "GPU Log: $AUDIOLLM_ENABLE_GPU_LOG (interval=${AUDIOLLM_GPU_LOG_INTERVAL_SEC}s)" | tee -a "$LOG_FILE"
+echo "Model IO Debug: $AUDIOLLM_ENABLE_MODEL_IO_DEBUG (limit per phase=${AUDIOLLM_MODEL_IO_DEBUG_LIMIT})" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 

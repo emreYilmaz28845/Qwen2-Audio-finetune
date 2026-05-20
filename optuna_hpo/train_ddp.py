@@ -274,6 +274,99 @@ def _report_progress(progress_file: str, step: int, metric: float):
     )
 
 
+def _model_io_debug_enabled(cfg) -> bool:
+    return bool(getattr(cfg.env, "debug_model_io", False))
+
+
+def _model_io_debug_limit(cfg) -> int:
+    return max(0, int(getattr(cfg.env, "debug_model_io_limit", 2)))
+
+
+def _model_io_debug_state(cfg) -> dict:
+    state = getattr(cfg.env, "_model_io_debug_state", None)
+    if state is None:
+        state = {"train": 0, "eval": 0}
+        cfg.env._model_io_debug_state = state
+    return state
+
+
+def _decode_ids(tokenizer, token_ids, *, skip_special_tokens: bool):
+    if isinstance(token_ids, torch.Tensor):
+        token_ids = token_ids.detach().cpu().tolist()
+    if not token_ids:
+        return ""
+    return tokenizer.decode(
+        token_ids,
+        skip_special_tokens=skip_special_tokens,
+        clean_up_tokenization_spaces=False,
+    )
+
+
+def _extract_debug_texts(metric_processor, batch, logits, sample_idx: int = 0):
+    tokenizer = metric_processor.tokenizer
+    labels = batch["labels"]
+    input_ids = batch["input_ids"]
+    attention_mask = batch.get("attention_mask")
+    preds = torch.argmax(logits, dim=-1)
+
+    label_mask = labels[sample_idx] != -100
+    label_indices = label_mask.nonzero(as_tuple=False).squeeze(-1)
+    true_ids = labels[sample_idx][label_indices] if label_indices.numel() > 0 else labels[sample_idx].new_empty((0,))
+    pred_indices = (label_indices - 1).clamp(min=0)
+    pred_ids = preds[sample_idx][pred_indices] if pred_indices.numel() > 0 else preds[sample_idx].new_empty((0,))
+
+    if attention_mask is not None:
+        attn_mask = attention_mask[sample_idx].bool()
+        visible_input_ids = input_ids[sample_idx][attn_mask]
+        prompt_mask = attn_mask & ~label_mask
+    else:
+        visible_input_ids = input_ids[sample_idx]
+        prompt_mask = ~label_mask
+
+    prompt_ids = input_ids[sample_idx][prompt_mask]
+
+    return {
+        "prompt_text": _decode_ids(tokenizer, prompt_ids, skip_special_tokens=False),
+        "full_input_text": _decode_ids(tokenizer, visible_input_ids, skip_special_tokens=False),
+        "target_text": _decode_ids(tokenizer, true_ids, skip_special_tokens=True),
+        "predicted_text": _decode_ids(tokenizer, pred_ids, skip_special_tokens=True),
+        "supervised_token_count": int(label_indices.numel()),
+    }
+
+
+def _maybe_log_model_io_debug(
+    logger,
+    cfg,
+    phase: str,
+    metric_processor,
+    batch,
+    logits,
+    *,
+    rank: int,
+    epoch: int,
+    step: int,
+    loss: float,
+):
+    if logger is None or rank != 0 or not _model_io_debug_enabled(cfg):
+        return
+
+    state = _model_io_debug_state(cfg)
+    if state.get(phase, 0) >= _model_io_debug_limit(cfg):
+        return
+    if "input_ids" not in batch or "labels" not in batch:
+        return
+
+    debug_texts = _extract_debug_texts(metric_processor, batch, logits, sample_idx=0)
+    state[phase] = state.get(phase, 0) + 1
+
+    logger.info("[Model IO Debug][%s #%s] epoch=%s step=%s loss=%.4f", phase.upper(), state[phase], epoch, step, loss)
+    logger.info("  Prompt: %r", debug_texts["prompt_text"])
+    logger.info("  Full Input: %r", debug_texts["full_input_text"])
+    logger.info("  Target: %r", debug_texts["target_text"])
+    logger.info("  Output: %r", debug_texts["predicted_text"])
+    logger.info("  Supervised Tokens: %s", debug_texts["supervised_token_count"])
+
+
 def _setup_run(cfg, trial_name):
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -338,6 +431,11 @@ def _log_trial_header(logger, trial_name, cfg, world_size, input_mode):
     logger.info("LoRA R: %s", cfg.peft.r)
     logger.info("LoRA Alpha: %s", cfg.peft.lora_alpha)
     logger.info("World Size: %s", world_size)
+    logger.info(
+        "Model IO Debug: %s (limit per phase=%s)",
+        _model_io_debug_enabled(cfg),
+        _model_io_debug_limit(cfg),
+    )
     for grouped_dataset_name in sorted(GROUPED_DATASET_NAMES):
         logger.info(
             "%s Eval: level=%s mode=%s threshold=%.4f",
@@ -441,7 +539,7 @@ def _build_best_eval_summary(cfg, eval_loss: float, primary_stats: dict, supplem
     return summary
 
 
-def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
+def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg, logger=None, epoch=-1, step=-1):
     eval_loss = 0.0
     eval_steps = 0
     global_stats = None
@@ -470,6 +568,18 @@ def _evaluate(model, eval_dataloader, device, metric_processor, rank, cfg):
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 outputs = model(**batch)
                 loss = outputs.loss
+                _maybe_log_model_io_debug(
+                    logger,
+                    cfg,
+                    "eval",
+                    metric_processor,
+                    batch,
+                    outputs.logits,
+                    rank=rank,
+                    epoch=epoch,
+                    step=step,
+                    loss=float(loss.item()),
+                )
                 if collect_grouped_records:
                     batch_grouped_records = build_grouped_eval_records(
                         metric_processor.tokenizer,
@@ -708,6 +818,18 @@ def train_textonly_ddp(cfg, trial_name=""):
                 outputs = model(**batch)
                 loss = outputs.loss
                 acc = compute_acc_text(metric_processor, outputs.logits, batch["labels"])
+                _maybe_log_model_io_debug(
+                    logger,
+                    cfg,
+                    "train",
+                    metric_processor,
+                    batch,
+                    outputs.logits,
+                    rank=rank,
+                    epoch=epoch,
+                    step=train_step,
+                    loss=float(loss.item()),
+                )
 
             (loss / grad_acc_steps).backward()
             should_step = ((train_step + 1) % grad_acc_steps == 0) or ((train_step + 1) == len(train_dataloader))
@@ -724,7 +846,7 @@ def train_textonly_ddp(cfg, trial_name=""):
 
             if (train_step + 1) % dynamic_eval_step == 0:
                 eval_loss, reduced_stats, supplemental_stats_by_dataset = _evaluate(
-                    model, eval_dataloader, device, metric_processor, rank, cfg
+                    model, eval_dataloader, device, metric_processor, rank, cfg, logger=logger, epoch=epoch, step=train_step
                 )
                 if rank == 0:
                     eval_step_idx += 1
@@ -968,6 +1090,18 @@ def train_audiotext_ddp(cfg, trial_name=""):
                 outputs = model(**batch)
                 loss = outputs.loss
                 acc = compute_acc_text(processor, outputs.logits, batch["labels"])
+                _maybe_log_model_io_debug(
+                    logger,
+                    cfg,
+                    "train",
+                    processor,
+                    batch,
+                    outputs.logits,
+                    rank=rank,
+                    epoch=epoch,
+                    step=train_step,
+                    loss=float(loss.item()),
+                )
 
             (loss / grad_acc_steps).backward()
             should_step = ((train_step + 1) % grad_acc_steps == 0) or ((train_step + 1) == len(train_dataloader))
@@ -983,7 +1117,7 @@ def train_audiotext_ddp(cfg, trial_name=""):
 
             if (train_step + 1) % dynamic_eval_step == 0:
                 eval_loss, reduced_stats, supplemental_stats_by_dataset = _evaluate(
-                    model, eval_dataloader, device, processor, rank, cfg
+                    model, eval_dataloader, device, processor, rank, cfg, logger=logger, epoch=epoch, step=train_step
                 )
                 if rank == 0:
                     eval_step_idx += 1
