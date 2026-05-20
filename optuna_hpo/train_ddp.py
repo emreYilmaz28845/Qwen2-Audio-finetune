@@ -534,31 +534,29 @@ def _extract_debug_texts(metric_processor, batch, logits, sample_idx: int = 0):
     }
 
 
-def _build_prompt_only_generate_inputs(batch, prompt_ids: torch.Tensor, sample_idx: int = 0):
-    generate_inputs = {}
-    for key, value in batch.items():
-        if key == "labels":
-            continue
-        if not isinstance(value, torch.Tensor):
-            continue
-        if key == "input_ids":
-            generate_inputs[key] = prompt_ids.unsqueeze(0)
-        elif key == "attention_mask":
-            generate_inputs[key] = torch.ones(
-                (1, prompt_ids.numel()),
-                dtype=value.dtype,
-                device=value.device,
-            )
-        else:
-            generate_inputs[key] = value[sample_idx : sample_idx + 1]
-    return generate_inputs
+def _extract_visible_input_text(metric_processor, batch, sample_idx: int = 0):
+    tokenizer = metric_processor.tokenizer
+    input_ids = batch.get("input_ids")
+    if input_ids is None:
+        return ""
+    attention_mask = batch.get("attention_mask")
+    if attention_mask is not None:
+        visible_input_ids = input_ids[sample_idx][attention_mask[sample_idx].bool()]
+    else:
+        visible_input_ids = input_ids[sample_idx]
+    return _decode_ids(tokenizer, visible_input_ids, skip_special_tokens=False)
 
 
-def _prompt_only_generate_text(model, metric_processor, batch, prompt_ids: torch.Tensor, sample_idx: int = 0) -> str:
-    if prompt_ids.numel() == 0:
+def _prompt_only_generate_text(model, metric_processor, generation_batch, sample_idx: int = 0) -> str:
+    input_ids = generation_batch.get("input_ids")
+    if input_ids is None or input_ids.size(1) == 0:
         return ""
 
-    generate_inputs = _build_prompt_only_generate_inputs(batch, prompt_ids, sample_idx=sample_idx)
+    generate_inputs = {}
+    for key, value in generation_batch.items():
+        if not isinstance(value, torch.Tensor):
+            continue
+        generate_inputs[key] = value[sample_idx : sample_idx + 1]
     generate_model = model.module if hasattr(model, "module") else model
     tokenizer = metric_processor.tokenizer
     generation_kwargs = {
@@ -573,7 +571,8 @@ def _prompt_only_generate_text(model, metric_processor, batch, prompt_ids: torch
     if dist.is_initialized() and dist.get_world_size() > 1:
         generation_kwargs["synced_gpus"] = True
     generated = generate_model.generate(**generate_inputs, **generation_kwargs)
-    generated_suffix = generated[:, prompt_ids.numel() :]
+    prompt_length = generate_inputs["input_ids"].shape[1]
+    generated_suffix = generated[:, prompt_length:]
     if generated_suffix.size(0) == 0:
         return ""
     return metric_processor.tokenizer.batch_decode(
@@ -597,6 +596,8 @@ def _maybe_log_model_io_debug(
     step: int,
     event_index: int,
     loss: float,
+    generation_batch=None,
+    generated_text: str = "",
 ):
     if logger is None or rank != 0 or not _model_io_debug_enabled(cfg):
         return
@@ -623,30 +624,42 @@ def _maybe_log_model_io_debug(
     state["last_logged_event"][phase] = event_index
     prompt_only_generate = ""
     parsed_generate_label = "unknown"
+    generation_input_text = ""
+    generation_input_contains_target = False
     if phase == "eval":
-        prompt_only_generate = _prompt_only_generate_text(
-            model,
-            metric_processor,
-            batch,
-            debug_texts["prompt_ids"],
-            sample_idx=0,
-        )
+        generation_source_batch = generation_batch if generation_batch is not None else batch
+        generation_input_text = _extract_visible_input_text(metric_processor, generation_source_batch, sample_idx=0)
+        if generated_text:
+            prompt_only_generate = generated_text
+        else:
+            prompt_only_generate = _prompt_only_generate_text(
+                model,
+                metric_processor,
+                generation_source_batch,
+                sample_idx=0,
+            )
         parsed_generate_label = _label_id_to_name(parse_generated_label(prompt_only_generate)["label"])
     true_label = _label_id_to_name(map_target_text_to_binary(debug_texts["target_text"]))
     full_input_contains_target = bool(
         debug_texts["target_text"] and debug_texts["target_text"] in debug_texts["full_input_text"]
     )
+    if phase == "eval":
+        generation_input_contains_target = bool(
+            debug_texts["target_text"] and debug_texts["target_text"] in generation_input_text
+        )
 
     logger.info("[Model IO Debug][%s #%s] epoch=%s step=%s loss=%.4f", phase.upper(), state[phase], epoch, step, loss)
     logger.info("  PHASE=%s", phase)
-    logger.info("  prompt=%r", debug_texts["prompt_text"])
-    logger.info("  full_model_input=%r", debug_texts["full_input_text"])
-    logger.info("  input_contains_target=%s", full_input_contains_target)
-    logger.info("  target_label=%r", debug_texts["target_text"])
-    logger.info("  label_span_prediction=%r", debug_texts["predicted_text"])
+    logger.info("  teacher_forced_prompt=%r", debug_texts["prompt_text"])
+    logger.info("  teacher_forced_full_input=%r", debug_texts["full_input_text"])
+    logger.info("  teacher_forced_input_contains_target=%s", full_input_contains_target)
+    logger.info("  teacher_forced_target_label=%r", debug_texts["target_text"])
+    logger.info("  teacher_forced_label_span_prediction=%r", debug_texts["predicted_text"])
     if phase == "eval":
-        logger.info("  prompt_only_generate=%r", prompt_only_generate)
-        logger.info("  parsed_generate_label=%s", parsed_generate_label)
+        logger.info("  generation_prompt_only_input=%r", generation_input_text)
+        logger.info("  generation_input_contains_target=%s", generation_input_contains_target)
+        logger.info("  generation_output=%r", prompt_only_generate)
+        logger.info("  generation_parsed_label=%s", parsed_generate_label)
     logger.info("  true_label=%s", true_label)
     logger.info("  supervised_tokens=%s", debug_texts["supervised_token_count"])
 
@@ -917,20 +930,6 @@ def _evaluate(
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 outputs = model(**supervised_batch)
                 loss = outputs.loss
-                _maybe_log_model_io_debug(
-                    model,
-                    logger,
-                    cfg,
-                    "eval",
-                    metric_processor,
-                    supervised_batch,
-                    outputs.logits,
-                    rank=rank,
-                    epoch=epoch,
-                    step=step,
-                    event_index=eval_event_index,
-                    loss=float(loss.item()),
-                )
                 if collect_grouped_records:
                     batch_teacher_forced_records = build_grouped_eval_records(
                         metric_processor.tokenizer,
@@ -962,6 +961,22 @@ def _evaluate(
                 generated_suffix,
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=False,
+            )
+            _maybe_log_model_io_debug(
+                model,
+                logger,
+                cfg,
+                "eval",
+                metric_processor,
+                supervised_batch,
+                outputs.logits,
+                rank=rank,
+                epoch=epoch,
+                step=step,
+                event_index=eval_event_index,
+                loss=float(loss.item()),
+                generation_batch=generation_batch,
+                generated_text=generated_texts[0] if generated_texts else "",
             )
             for sample_index, generated_text in enumerate(generated_texts):
                 dataset_name = dataset_names[sample_index] if sample_index < len(dataset_names) else ""
