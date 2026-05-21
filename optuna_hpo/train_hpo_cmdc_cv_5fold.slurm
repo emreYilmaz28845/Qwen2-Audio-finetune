@@ -99,7 +99,8 @@ exec 2> >(tee -a "$SLURM_STDERR_FILE" >&2)
 
 N_TRIALS="${N_TRIALS:-20}"
 TARGET_TOTAL_TRIALS="${TARGET_TOTAL_TRIALS:-}"
-STUDY_NAME="${STUDY_NAME:-cmdc_${CMDC_EVAL_LEVEL}_${MODEL_FAMILY}_${PROMPT_MODE}_${STUDY_MODE}_cv_hpo_$(date +%Y%m%d_%H%M%S)}"
+STUDY_TIMESTAMP="${STUDY_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME="${STUDY_NAME:-Hpo_Study_${PROMPT_MODE}_${STUDY_TIMESTAMP}}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
 LOG_FILE="$LOG_DIR/optuna_cmdc_cv_5fold_${TIMESTAMP}.log"
@@ -193,6 +194,19 @@ case "${ENABLE_PRUNING,,}" in
         ;;
 esac
 
+EXTRA_ARGS=(
+    --study-timestamp "$STUDY_TIMESTAMP"
+    --trial-number "${TRIAL_NUMBER:-1}"
+    --lr "${LR:-4e-05}"
+    --batch-size "${BATCH_SIZE:-1}"
+    --lora-r "${LORA_R:-8}"
+    --lora-alpha "${LORA_ALPHA:-16}"
+    --fold-name "${FOLD_NAME:-fold1}"
+)
+if [ "${PRINT_PATHS_ONLY:-0}" = "1" ]; then
+    EXTRA_ARGS+=(--print-paths-only)
+fi
+
 python optuna_hpo/hpo_cv_5fold.py \
     --n-trials "$N_TRIALS" \
     --study-name "$STUDY_NAME" \
@@ -211,7 +225,8 @@ python optuna_hpo/hpo_cv_5fold.py \
     --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
     --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
     "$PRUNING_FLAG" \
-    "${TARGET_TOTAL_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
+    "${TARGET_TOTAL_ARGS[@]}" \
+    "${EXTRA_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
 
 echo "" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"

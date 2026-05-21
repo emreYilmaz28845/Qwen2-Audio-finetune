@@ -28,10 +28,11 @@ case "${MODEL_FAMILY}:${PROMPT_MODE}" in
 esac
 
 N_TRIALS=${1:-20}
-STUDY_NAME_DEFAULT="cmdc_${CMDC_EVAL_LEVEL}_${MODEL_FAMILY}_${PROMPT_MODE}_${STUDY_MODE}_hpo_$(date +%Y%m%d_%H%M%S)"
+STUDY_TIMESTAMP="${STUDY_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME_DEFAULT="Hpo_Study_${PROMPT_MODE}_${STUDY_TIMESTAMP}"
 STUDY_NAME=${2:-$STUDY_NAME_DEFAULT}
 CMDC_ROOT="${CMDC_ROOT:-$(pwd)/data/cmdc}"
-SAVE_ROOT="${SAVE_ROOT:-output_model/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}/${PROMPT_MODE}}"
+SAVE_ROOT="${SAVE_ROOT:-output_model/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}}"
 STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}}"
 LOG_DIR="${LOG_DIR:-logs/optuna_cmdc_cv_5fold_${STUDY_MODE}_${CMDC_EVAL_LEVEL}}"
 NUM_GPUS="${NUM_GPUS:-4}"
@@ -86,6 +87,14 @@ if [ -d "/gpfs/projects/etur92" ]; then
     STORAGE_PATH="$STORAGE_PATH" \
     LOG_DIR="$LOG_DIR" \
     NUM_GPUS="$NUM_GPUS" \
+    STUDY_TIMESTAMP="$STUDY_TIMESTAMP" \
+    PRINT_PATHS_ONLY="${PRINT_PATHS_ONLY:-0}" \
+    TRIAL_NUMBER="${TRIAL_NUMBER:-1}" \
+    LR="${LR:-4e-05}" \
+    BATCH_SIZE="${BATCH_SIZE:-1}" \
+    LORA_R="${LORA_R:-8}" \
+    LORA_ALPHA="${LORA_ALPHA:-16}" \
+    FOLD_NAME="${FOLD_NAME:-fold1}" \
     sbatch optuna_hpo/train_hpo_cmdc_cv_5fold.slurm
 
     echo "SLURM job submitted! Check ${LOG_DIR} for progress."
@@ -115,6 +124,11 @@ else
     export CMDC_EVAL_MODE
     export CMDC_PERSON_THRESHOLD
 
+    EXTRA_ARGS=()
+    if [ "${PRINT_PATHS_ONLY:-0}" = "1" ]; then
+        EXTRA_ARGS+=(--print-paths-only)
+    fi
+
     python optuna_hpo/hpo_cv_5fold.py \
         --n-trials "$N_TRIALS" \
         --study-name "$STUDY_NAME" \
@@ -129,10 +143,18 @@ else
         --cmdc-eval-level "$CMDC_EVAL_LEVEL" \
         --cmdc-eval-mode "$CMDC_EVAL_MODE" \
         --cmdc-person-threshold "$CMDC_PERSON_THRESHOLD" \
+        --study-timestamp "$STUDY_TIMESTAMP" \
+        --trial-number "${TRIAL_NUMBER:-1}" \
+        --lr "${LR:-4e-05}" \
+        --batch-size "${BATCH_SIZE:-1}" \
+        --lora-r "${LORA_R:-8}" \
+        --lora-alpha "${LORA_ALPHA:-16}" \
+        --fold-name "${FOLD_NAME:-fold1}" \
         --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
         --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
         --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
-        "$PRUNING_FLAG"
+        "$PRUNING_FLAG" \
+        "${EXTRA_ARGS[@]}"
 fi
 
 echo ""

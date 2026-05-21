@@ -759,9 +759,6 @@ def _setup_run(cfg, trial_name):
     setup_ddp(cfg.env.device_type)
     dist.barrier()
 
-    if trial_name:
-        cfg.env.save_path = f"{cfg.env.save_path}_trial_{trial_name}"
-
     if rank == 0:
         os.makedirs(cfg.env.save_path, exist_ok=True)
         train_log_path = os.path.join(cfg.env.save_path, "train_log")

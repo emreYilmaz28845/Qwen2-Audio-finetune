@@ -24,6 +24,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from optuna_hpo.train_launcher import launch_ddp_training
+from optuna_hpo.path_helpers import build_cmdc_cv_layout, resolve_study_timestamp
 from optuna_hpo.pruning import (
     DEFAULT_ENABLE_PRUNING,
     DEFAULT_PRUNER_INTERVAL_STEPS,
@@ -65,16 +66,20 @@ def parse_folds(folds_text: str):
     return [token.strip() for token in folds_text.split() if token.strip()]
 
 
-def default_save_root_for_study_mode(study_mode: str):
-    return f"output_model/optuna_cmdc_cv_5fold_{study_mode}"
+def default_save_root_for_study_mode(study_mode: str, cmdc_eval_level: str):
+    return build_cmdc_cv_layout(
+        study_mode=study_mode,
+        prompt_mode=os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY),
+        eval_level=normalize_grouped_eval_level(cmdc_eval_level),
+    ).output_model_root
 
 
-def default_storage_path_for_study_mode(study_mode: str):
-    return f"optuna_studies/optuna_cmdc_cv_5fold_{study_mode}"
-
-
-def cmdc_level_suffix(cmdc_eval_level: str):
-    return f"_{normalize_grouped_eval_level(cmdc_eval_level)}"
+def default_storage_path_for_study_mode(study_mode: str, cmdc_eval_level: str):
+    return build_cmdc_cv_layout(
+        study_mode=study_mode,
+        prompt_mode=os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY),
+        eval_level=normalize_grouped_eval_level(cmdc_eval_level),
+    ).storage_path
 
 
 def normalize_model_family(model_family: str):
@@ -199,6 +204,22 @@ def validate_audio_fold_configs(cmdc_root: str, folds, prompt_mode: str, model_f
         raise RuntimeError(message)
 
 
+def should_print_paths_only(args) -> bool:
+    return getattr(args, "print_paths_only", False) or env_flag("PRINT_PATHS_ONLY", False)
+
+
+def print_cmdc_paths(prompt_mode: str, eval_level: str, path_layout):
+    print("dataset=cmdc")
+    print(f"prompt_mode={prompt_mode}")
+    print(f"eval_level={eval_level}")
+    print(f"study_name={path_layout.study_name}")
+    print(f"study_dir={path_layout.study_dir}")
+    print(f"output_model_root={path_layout.output_model_root}")
+    print(f"trial_output_dir={path_layout.trial_output_dir}")
+    print(f"fold_output_dir={path_layout.fold_output_dir}")
+    print(f"best_model_dir={path_layout.best_model_dir}")
+
+
 def sample_trial_params(trial: optuna.Trial):
     lr = trial.suggest_float("lr", 1e-6, 1e-3, log=True)
     batch_size = trial.suggest_categorical("batch_size", [2, 4])
@@ -264,6 +285,8 @@ def run_fold_trial(
     cmdc_eval_level,
     cmdc_eval_mode,
     cmdc_person_threshold,
+    study_mode,
+    study_timestamp,
 ):
     previous_env = {
         "TRAIN_PROMPT_FILE": os.environ.get("TRAIN_PROMPT_FILE"),
@@ -291,7 +314,26 @@ def run_fold_trial(
     os.environ["CMDC_EVAL_MODE"] = cmdc_eval_mode
     os.environ["CMDC_PERSON_THRESHOLD"] = str(cmdc_person_threshold)
 
-    fold_save_path = os.path.join(save_root, f"trial_{trial.number:03d}", fold_name)
+    path_layout = build_cmdc_cv_layout(
+        study_mode=study_mode,
+        prompt_mode=prompt_mode,
+        eval_level=cmdc_eval_level,
+        base_output_dir=os.path.dirname(save_root),
+        study_timestamp=study_timestamp,
+        trial_number=trial.number,
+        lr=trial_params["lr"],
+        batch_size=trial_params["batch_size"],
+        lora_r=trial_params["lora_r"],
+        lora_alpha=trial_params["lora_alpha"],
+        fold_name=fold_name,
+    )
+    fold_save_path = path_layout.fold_output_dir
+    logger.info("  Study Dir: %s", path_layout.study_dir)
+    logger.info("  Output Model Root: %s", path_layout.output_model_root)
+    logger.info("  Trial Output Dir: %s", path_layout.trial_output_dir)
+    logger.info("  Fold Name: %s", fold_name)
+    logger.info("  Fold Output Dir: %s", path_layout.fold_output_dir)
+    logger.info("  Best Model Dir: %s", path_layout.best_model_dir)
 
     try:
         best_f1 = launch_ddp_training(
@@ -342,6 +384,8 @@ def build_objective(
     cmdc_eval_level,
     cmdc_eval_mode,
     cmdc_person_threshold,
+    study_mode,
+    study_timestamp,
 ):
     launch_input_mode = resolve_launch_input_mode(model_family)
 
@@ -374,6 +418,8 @@ def build_objective(
                     cmdc_eval_level=cmdc_eval_level,
                     cmdc_eval_mode=cmdc_eval_mode,
                     cmdc_person_threshold=cmdc_person_threshold,
+                    study_mode=study_mode,
+                    study_timestamp=study_timestamp,
                 )
                 fold_results.append(fold_result)
                 valid_fold_scores = [
@@ -470,6 +516,8 @@ def build_single_fold_objective(
     cmdc_eval_level,
     cmdc_eval_mode,
     cmdc_person_threshold,
+    study_mode,
+    study_timestamp,
 ):
     fold_cfg = get_fold_config(cmdc_root, fold_name, prompt_mode)
     launch_input_mode = resolve_launch_input_mode(model_family)
@@ -500,6 +548,8 @@ def build_single_fold_objective(
                 cmdc_eval_level=cmdc_eval_level,
                 cmdc_eval_mode=cmdc_eval_mode,
                 cmdc_person_threshold=cmdc_person_threshold,
+                study_mode=study_mode,
+                study_timestamp=study_timestamp,
             )
         except optuna.TrialPruned:
             raise
@@ -607,12 +657,22 @@ def run_optimization(
     cmdc_person_threshold=0.5,
 ):
     os.makedirs(storage_path, exist_ok=True)
-    os.makedirs(save_root, exist_ok=True)
     cmdc_eval_level = normalize_grouped_eval_level(cmdc_eval_level)
     cmdc_eval_mode = normalize_grouped_eval_mode(cmdc_eval_mode)
     cmdc_person_threshold = validate_grouped_person_threshold(cmdc_person_threshold)
     validate_mode_combination(model_family, prompt_mode)
     validate_audio_fold_configs(cmdc_root, folds, prompt_mode, model_family)
+
+    study_timestamp = study_name.removeprefix(f"Hpo_Study_{prompt_mode}_")
+    path_layout = build_cmdc_cv_layout(
+        study_mode="cv_mean",
+        prompt_mode=prompt_mode,
+        eval_level=cmdc_eval_level,
+        base_output_dir=os.path.dirname(save_root),
+        base_storage_dir=os.path.dirname(storage_path),
+        study_timestamp=study_timestamp,
+    )
+    os.makedirs(path_layout.study_dir, exist_ok=True)
 
     logger.info("\n%s", "=" * 70)
     logger.info("Starting Optuna optimization")
@@ -631,7 +691,10 @@ def run_optimization(
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
-    logger.info("  Save Root: %s", save_root)
+    logger.info("  Study Dir: %s", path_layout.study_dir)
+    logger.info("  Output Model Root: %s", path_layout.output_model_root)
+    logger.info("  Trial Output Dir: %s", path_layout.trial_output_dir)
+    logger.info("  Best Model Dir: %s", path_layout.best_model_dir)
     logger.info("  Resume Existing Study: %s", resume)
     logger.info(
         "  Target Total Completed Trials: %s",
@@ -662,6 +725,8 @@ def run_optimization(
         cmdc_eval_level=cmdc_eval_level,
         cmdc_eval_mode=cmdc_eval_mode,
         cmdc_person_threshold=cmdc_person_threshold,
+        study_mode="cv_mean",
+        study_timestamp=study_timestamp,
     )
 
     results_file = os.path.join(storage_path, f"{study_name}_results.json")
@@ -743,12 +808,22 @@ def run_per_fold_optimization(
     cmdc_person_threshold=0.5,
 ):
     os.makedirs(storage_path, exist_ok=True)
-    os.makedirs(save_root, exist_ok=True)
     cmdc_eval_level = normalize_grouped_eval_level(cmdc_eval_level)
     cmdc_eval_mode = normalize_grouped_eval_mode(cmdc_eval_mode)
     cmdc_person_threshold = validate_grouped_person_threshold(cmdc_person_threshold)
     validate_mode_combination(model_family, prompt_mode)
     validate_audio_fold_configs(cmdc_root, folds, prompt_mode, model_family)
+
+    study_timestamp = study_name.removeprefix(f"Hpo_Study_{prompt_mode}_")
+    summary_layout = build_cmdc_cv_layout(
+        study_mode="per_fold",
+        prompt_mode=prompt_mode,
+        eval_level=cmdc_eval_level,
+        base_output_dir=os.path.dirname(save_root),
+        base_storage_dir=os.path.dirname(storage_path),
+        study_timestamp=study_timestamp,
+    )
+    os.makedirs(summary_layout.study_dir, exist_ok=True)
 
     logger.info("\n%s", "=" * 70)
     logger.info("Starting Optuna optimization")
@@ -767,7 +842,8 @@ def run_per_fold_optimization(
     logger.info("  Trials Per Fold: %s", n_trials)
     logger.info("  CMDC Root: %s", cmdc_root)
     logger.info("  Folds: %s", ", ".join(folds))
-    logger.info("  Save Root: %s", save_root)
+    logger.info("  Study Dir: %s", summary_layout.study_dir)
+    logger.info("  Output Model Root: %s", summary_layout.output_model_root)
     logger.info("  Resume Existing Study: %s", resume)
     logger.info(
         "  Target Total Completed Trials Per Fold: %s",
@@ -780,15 +856,12 @@ def run_per_fold_optimization(
 
     for fold_name in folds:
         fold_study_name = f"{study_name}_{fold_name}"
-        fold_save_root = os.path.join(save_root, fold_name)
-        os.makedirs(fold_save_root, exist_ok=True)
-
         logger.info("\n%s", "=" * 70)
         logger.info("Starting per-fold study")
         logger.info("  Fold: %s", fold_name)
         logger.info("  Study Name: %s", fold_study_name)
         logger.info("  Trials: %s", n_trials)
-        logger.info("  Save Root: %s", fold_save_root)
+        logger.info("  Output Model Root: %s", save_root)
         logger.info("%s\n", "=" * 70)
 
         study = run_study(
@@ -805,7 +878,7 @@ def run_per_fold_optimization(
             cmdc_root=cmdc_root,
             fold_name=fold_name,
             model_path=model_path,
-            save_root=fold_save_root,
+            save_root=save_root,
             num_gpus=num_gpus,
             model_family=model_family,
             prompt_mode=prompt_mode,
@@ -813,6 +886,8 @@ def run_per_fold_optimization(
             cmdc_eval_level=cmdc_eval_level,
             cmdc_eval_mode=cmdc_eval_mode,
             cmdc_person_threshold=cmdc_person_threshold,
+            study_mode="per_fold",
+            study_timestamp=study_timestamp,
         )
 
         try:
@@ -1034,7 +1109,70 @@ def main():
         type=float,
         default=float(os.environ.get("CMDC_PERSON_THRESHOLD", "0.5")),
     )
+    parser.add_argument(
+        "--print-paths-only",
+        action="store_true",
+        help="Print resolved Optuna paths and exit before CUDA, dataset loading, or optimization.",
+    )
+    parser.add_argument(
+        "--trial-number",
+        type=int,
+        default=int(os.environ.get("TRIAL_NUMBER", "1")),
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=float(os.environ.get("LR", "4e-05")),
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=int(os.environ.get("BATCH_SIZE", "1")),
+    )
+    parser.add_argument(
+        "--lora-r",
+        type=int,
+        default=int(os.environ.get("LORA_R", "8")),
+    )
+    parser.add_argument(
+        "--lora-alpha",
+        type=int,
+        default=int(os.environ.get("LORA_ALPHA", "16")),
+    )
+    parser.add_argument(
+        "--study-timestamp",
+        type=str,
+        default=os.environ.get("STUDY_TIMESTAMP"),
+    )
+    parser.add_argument(
+        "--fold-name",
+        type=str,
+        default=os.environ.get("FOLD_NAME", "fold1"),
+    )
     args = parser.parse_args()
+
+    prompt_mode = args.prompt_mode
+    model_family = normalize_model_family(args.model_family)
+    cmdc_eval_level = normalize_grouped_eval_level(args.cmdc_eval_level)
+    storage_path = args.storage_path or default_storage_path_for_study_mode(args.study_mode, cmdc_eval_level)
+    save_root = args.save_root or default_save_root_for_study_mode(args.study_mode, cmdc_eval_level)
+    path_layout = build_cmdc_cv_layout(
+        study_mode=args.study_mode,
+        prompt_mode=prompt_mode,
+        eval_level=cmdc_eval_level,
+        base_output_dir=os.path.dirname(save_root),
+        base_storage_dir=os.path.dirname(storage_path),
+        study_timestamp=args.study_timestamp,
+        trial_number=args.trial_number,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        fold_name=args.fold_name,
+    )
+    if should_print_paths_only(args):
+        print_cmdc_paths(prompt_mode=prompt_mode, eval_level=cmdc_eval_level, path_layout=path_layout)
+        sys.exit(0)
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available! This script requires GPU.")
@@ -1043,17 +1181,13 @@ def main():
     logger.info("Total VRAM: %.2f GB", torch.cuda.get_device_properties(0).total_memory / 1e9)
 
     folds = parse_folds(args.folds)
-    prompt_mode = args.prompt_mode
-    model_family = normalize_model_family(args.model_family)
 
     validate_mode_combination(model_family, prompt_mode)
-    storage_path = args.storage_path or default_storage_path_for_study_mode(args.study_mode)
-    save_root = args.save_root or default_save_root_for_study_mode(args.study_mode)
     os.environ["MODEL_FAMILY"] = model_family
     os.environ["PROMPT_MODE"] = prompt_mode
     os.environ["STORAGE_PATH"] = storage_path
     os.environ["SAVE_ROOT"] = save_root
-    os.environ["CMDC_EVAL_LEVEL"] = normalize_grouped_eval_level(args.cmdc_eval_level)
+    os.environ["CMDC_EVAL_LEVEL"] = cmdc_eval_level
     os.environ["CMDC_EVAL_MODE"] = normalize_grouped_eval_mode(args.cmdc_eval_mode)
     os.environ["CMDC_PERSON_THRESHOLD"] = str(validate_grouped_person_threshold(args.cmdc_person_threshold))
     if args.study_mode == "per_fold":

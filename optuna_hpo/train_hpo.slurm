@@ -165,7 +165,7 @@ export AUDIOLLM_EVAL_PRINT_PREDICTIONS_LIMIT="${AUDIOLLM_EVAL_PRINT_PREDICTIONS_
 
 export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/${LOG_DIR_NAME}${DATASET_LEVEL_SUFFIX}}"
 export STORAGE_PATH="${STORAGE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/optuna_studies/${STORAGE_DIR_NAME}${DATASET_LEVEL_SUFFIX}}"
-export SAVE_PATH="${SAVE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/${OUTPUT_DIR_NAME}${DATASET_LEVEL_SUFFIX}/${PROMPT_MODE}}"
+export SAVE_PATH="${SAVE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/${OUTPUT_DIR_NAME}${DATASET_LEVEL_SUFFIX}}"
 
 mkdir -p "$LOG_DIR" "$STORAGE_PATH" "$SAVE_PATH"
 
@@ -175,7 +175,8 @@ exec > >(tee -a "$SLURM_STDOUT_FILE")
 exec 2> >(tee -a "$SLURM_STDERR_FILE" >&2)
 
 N_TRIALS="${N_TRIALS:-20}"
-STUDY_NAME="${STUDY_NAME:-${DATASET_NAME}${DATASET_LEVEL_SUFFIX}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)}"
+STUDY_TIMESTAMP="${STUDY_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME="${STUDY_NAME:-Hpo_Study_${PROMPT_MODE}_${STUDY_TIMESTAMP}}"
 
 TIMESTAMP=$(date +%Y-%m-%d_%H:%M:%S)
 LOG_FILE="$LOG_DIR/${LOG_FILE_PREFIX}_${TIMESTAMP}.log"
@@ -268,6 +269,18 @@ case "${ENABLE_PRUNING,,}" in
         ;;
 esac
 
+EXTRA_ARGS=(
+    --study-timestamp "$STUDY_TIMESTAMP"
+    --trial-number "${TRIAL_NUMBER:-1}"
+    --lr "${LR:-4e-05}"
+    --batch-size "${BATCH_SIZE:-1}"
+    --lora-r "${LORA_R:-8}"
+    --lora-alpha "${LORA_ALPHA:-16}"
+)
+if [ "${PRINT_PATHS_ONLY:-0}" = "1" ]; then
+    EXTRA_ARGS+=(--print-paths-only)
+fi
+
 python optuna_hpo/hpo.py \
     --n-trials "$N_TRIALS" \
     --study-name "$STUDY_NAME" \
@@ -286,7 +299,8 @@ python optuna_hpo/hpo.py \
     --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
     --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
     --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
-    "$PRUNING_FLAG" 2>&1 | tee -a "$LOG_FILE"
+    "$PRUNING_FLAG" \
+    "${EXTRA_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
 
 echo "" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"

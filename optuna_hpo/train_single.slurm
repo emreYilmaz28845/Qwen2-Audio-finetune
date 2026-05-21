@@ -27,6 +27,12 @@ export DATASET_NAME="${DATASET_NAME:-merged}" # merged, daic_woz, eatd
 export MODEL_FAMILY="${MODEL_FAMILY:-audio}" # audio or text
 export PROMPT_MODE="${PROMPT_MODE:-audiotext}" # full, audiotext, or textonly
 export TASK_VARIANT="${TASK_VARIANT:-default}" # default or filtered
+export DAIC_WOZ_EVAL_LEVEL="${DAIC_WOZ_EVAL_LEVEL:-${DAIC_EVAL_LEVEL:-person}}"
+export DAIC_WOZ_EVAL_MODE="${DAIC_WOZ_EVAL_MODE:-${DAIC_EVAL_MODE:-majority_vote}}"
+export DAIC_WOZ_PERSON_THRESHOLD="${DAIC_WOZ_PERSON_THRESHOLD:-${DAIC_PERSON_THRESHOLD:-0.5}}"
+export EATD_EVAL_LEVEL="${EATD_EVAL_LEVEL:-person}"
+export EATD_EVAL_MODE="${EATD_EVAL_MODE:-majority_vote}"
+export EATD_PERSON_THRESHOLD="${EATD_PERSON_THRESHOLD:-0.5}"
 export NUM_GPUS="${NUM_GPUS:-4}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
@@ -68,15 +74,15 @@ esac
 case "$DATASET_NAME" in
     merged)
         LOG_DIR_NAME="single_trial_merged"
-        OUTPUT_DIR_NAME="single_trial/merged"
+        OUTPUT_DIR_NAME="optuna_merged_hpo"
         ;;
     daic_woz)
         LOG_DIR_NAME="single_trial_daic_woz"
-        OUTPUT_DIR_NAME="single_trial/daic_woz"
+        OUTPUT_DIR_NAME="optuna_daic_woz_hpo"
         ;;
     eatd)
         LOG_DIR_NAME="single_trial_eatd"
-        OUTPUT_DIR_NAME="single_trial/eatd"
+        OUTPUT_DIR_NAME="optuna_eatd_hpo"
         ;;
     *)
         echo "Unsupported DATASET_NAME: $DATASET_NAME"
@@ -85,8 +91,15 @@ case "$DATASET_NAME" in
         ;;
 esac
 
+DATASET_LEVEL_SUFFIX=""
+if [ "$DATASET_NAME" = "daic_woz" ]; then
+    DATASET_LEVEL_SUFFIX="_${DAIC_WOZ_EVAL_LEVEL}"
+elif [ "$DATASET_NAME" = "eatd" ]; then
+    DATASET_LEVEL_SUFFIX="_${EATD_EVAL_LEVEL}"
+fi
+
 export LOG_DIR="${LOG_DIR:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/logs/${LOG_DIR_NAME}}"
-export SAVE_PATH="${SAVE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/${OUTPUT_DIR_NAME}/${PROMPT_MODE}}"
+export SAVE_PATH="${SAVE_PATH:-/gpfs/projects/etur92/ozu647717/AudioLLM/Qwen2-Audio-finetune/output_model/${OUTPUT_DIR_NAME}${DATASET_LEVEL_SUFFIX}}"
 mkdir -p "$LOG_DIR" "$SAVE_PATH"
 
 SLURM_STDOUT_FILE="$LOG_DIR/single-trial-${SLURM_JOB_ID}.out"
@@ -170,6 +183,11 @@ stop_gpu_logger() {
 trap stop_gpu_logger EXIT
 start_gpu_logger
 
+EXTRA_ARGS=()
+if [ "${PRINT_PATHS_ONLY:-0}" = "1" ]; then
+    EXTRA_ARGS+=(--print-paths-only)
+fi
+
 python optuna_hpo/run_one_trial.py \
     --trial-number "$TRIAL_NUMBER" \
     --lr "$LR" \
@@ -181,7 +199,15 @@ python optuna_hpo/run_one_trial.py \
     --model-family "$MODEL_FAMILY" \
     --prompt-mode "$PROMPT_MODE" \
     --task-variant "$TASK_VARIANT" \
-    --save-path "$SAVE_PATH" 2>&1 | tee -a "$LOG_FILE"
+    --save-path "$SAVE_PATH" \
+    --daic-eval-level "$DAIC_WOZ_EVAL_LEVEL" \
+    --daic-eval-mode "$DAIC_WOZ_EVAL_MODE" \
+    --daic-person-threshold "$DAIC_WOZ_PERSON_THRESHOLD" \
+    --eatd-eval-level "$EATD_EVAL_LEVEL" \
+    --eatd-eval-mode "$EATD_EVAL_MODE" \
+    --eatd-person-threshold "$EATD_PERSON_THRESHOLD" \
+    --study-timestamp "${STUDY_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}" \
+    "${EXTRA_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
 
 echo "" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"

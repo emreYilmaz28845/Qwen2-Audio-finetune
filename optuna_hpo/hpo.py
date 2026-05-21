@@ -35,6 +35,7 @@ from optuna_hpo.pruning import (
     build_pruner,
     env_flag,
 )
+from optuna_hpo.path_helpers import build_single_dataset_layout, resolve_study_timestamp
 from optuna_hpo.train_launcher import launch_ddp_training
 from utils.grouped_eval import (
     GROUPED_DATASET_NAMES,
@@ -125,18 +126,6 @@ def resolve_model_path(model_family: str):
     return TEXT_MODEL_PATH_DEFAULT
 
 
-def default_log_dir(dataset_name: str):
-    return f"logs/optuna_{dataset_name}"
-
-
-def default_storage_path(dataset_name: str):
-    return f"optuna_studies/optuna_{dataset_name}"
-
-
-def default_save_root(dataset_name: str, prompt_mode: str):
-    return f"output_model/optuna_{dataset_name}_hpo/{prompt_mode}"
-
-
 def _normalized_grouped_eval_values(level: str, mode: str, threshold: float):
     return (
         normalize_grouped_eval_level(level),
@@ -211,24 +200,41 @@ def grouped_level_suffix(dataset_name: str, grouped_settings: dict):
 
 
 def resolved_log_dir(dataset_name: str, grouped_settings: dict):
-    return f"{default_log_dir(dataset_name)}{grouped_level_suffix(dataset_name, grouped_settings)}"
+    layout = build_single_dataset_layout(
+        dataset_name=dataset_name,
+        prompt_mode=os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY),
+        eval_level=grouped_settings.get(dataset_name, {}).get("level"),
+    )
+    return layout.log_dir
 
 
 def resolved_storage_path(dataset_name: str, grouped_settings: dict):
-    return f"{default_storage_path(dataset_name)}{grouped_level_suffix(dataset_name, grouped_settings)}"
+    layout = build_single_dataset_layout(
+        dataset_name=dataset_name,
+        prompt_mode=os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY),
+        eval_level=grouped_settings.get(dataset_name, {}).get("level"),
+    )
+    return layout.storage_path
 
 
 def resolved_save_root(dataset_name: str, prompt_mode: str, grouped_settings: dict):
-    suffix = grouped_level_suffix(dataset_name, grouped_settings)
-    return f"output_model/optuna_{dataset_name}_hpo{suffix}/{prompt_mode}"
+    layout = build_single_dataset_layout(
+        dataset_name=dataset_name,
+        prompt_mode=prompt_mode,
+        eval_level=grouped_settings.get(dataset_name, {}).get("level"),
+    )
+    return layout.output_model_root
 
 
 def resolved_study_name(dataset_name: str, model_family: str, prompt_mode: str, grouped_settings: dict):
-    timestamp = os.environ.get("STUDY_TIMESTAMP", "")
-    if not timestamp:
-        timestamp = __import__("time").strftime("%Y%m%d_%H%M%S")
-    suffix = grouped_level_suffix(dataset_name, grouped_settings)
-    return f"{dataset_name}{suffix}_{model_family}_{prompt_mode}_hpo_{timestamp}"
+    del model_family
+    layout = build_single_dataset_layout(
+        dataset_name=dataset_name,
+        prompt_mode=prompt_mode,
+        eval_level=grouped_settings.get(dataset_name, {}).get("level"),
+        study_timestamp=resolve_study_timestamp(),
+    )
+    return layout.study_name
 
 
 def dataset_root(dataset_name: str):
@@ -307,10 +313,49 @@ def apply_grouped_eval_env(grouped_settings: dict):
     os.environ["DAIC_PERSON_THRESHOLD"] = str(daic_values["threshold"])
 
 
+def grouped_eval_level_for_dataset(dataset_name: str, grouped_settings: dict):
+    if grouped_eval_enabled(dataset_name):
+        return grouped_settings[dataset_name]["level"]
+    return ""
+
+
+def should_print_paths_only(args) -> bool:
+    return getattr(args, "print_paths_only", False) or env_flag("PRINT_PATHS_ONLY", False)
+
+
+def log_optuna_path_details(
+    dataset_name: str,
+    prompt_mode: str,
+    eval_level: str,
+    path_layout,
+):
+    logger.info("  Dataset: %s", dataset_name)
+    logger.info("  Prompt Mode: %s", prompt_mode)
+    logger.info("  Eval Level: %s", eval_level)
+    logger.info("  Study Name: %s", path_layout.study_name)
+    logger.info("  Study Dir: %s", path_layout.study_dir)
+    logger.info("  Output Model Root: %s", path_layout.output_model_root)
+    logger.info("  Trial Output Dir: %s", path_layout.trial_output_dir)
+    logger.info("  Best Model Dir: %s", path_layout.best_model_dir)
+
+
+def print_single_dataset_paths(dataset_name: str, prompt_mode: str, eval_level: str, path_layout):
+    print(f"dataset={dataset_name}")
+    print(f"prompt_mode={prompt_mode}")
+    print(f"eval_level={eval_level}")
+    print(f"study_name={path_layout.study_name}")
+    print(f"study_dir={path_layout.study_dir}")
+    print(f"output_model_root={path_layout.output_model_root}")
+    print(f"trial_output_dir={path_layout.trial_output_dir}")
+    print(f"best_model_dir={path_layout.best_model_dir}")
+
+
 def build_objective(
     dataset_cfg: DatasetConfig,
     model_path: str,
-    save_root: str,
+    output_model_root: str,
+    study_name: str,
+    study_timestamp: str,
     num_gpus: int,
     model_family: str,
     enable_pruning: bool,
@@ -350,6 +395,24 @@ def build_objective(
             "lora_r": lora_r,
             "lora_alpha": lora_alpha,
         }
+        eval_level = grouped_eval_level_for_dataset(dataset_cfg.dataset_name, grouped_settings)
+        path_layout = build_single_dataset_layout(
+            dataset_name=dataset_cfg.dataset_name,
+            prompt_mode=os.environ.get("PROMPT_MODE", PROMPT_MODE_TEXTONLY),
+            eval_level=eval_level,
+            base_output_dir=os.path.dirname(output_model_root),
+            study_timestamp=study_timestamp,
+            trial_number=trial.number,
+            lr=lr,
+            batch_size=batch_size,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+        )
+        logger.info("  Study Name: %s", study_name)
+        logger.info("  Study Dir: %s", path_layout.study_dir)
+        logger.info("  Output Model Root: %s", path_layout.output_model_root)
+        logger.info("  Trial Output Dir: %s", path_layout.trial_output_dir)
+        logger.info("  Best Model Dir: %s", path_layout.best_model_dir)
 
         best_f1 = launch_ddp_training(
             trial=trial,
@@ -358,7 +421,7 @@ def build_objective(
             model_path=model_path,
             train_data_path=dataset_cfg.train_data_path,
             eval_data_path=dataset_cfg.eval_data_path,
-            save_path=save_root,
+            save_path=path_layout.trial_output_dir,
             dataset_name=dataset_cfg.dataset_name,
             input_mode=launch_input_mode,
             num_gpus=num_gpus,
@@ -397,8 +460,17 @@ def run_optimization(
 
     launch_input_mode = resolve_launch_input_mode(model_family)
     storage_path = storage_path or resolved_storage_path(dataset_name, grouped_settings)
-    save_root = save_root or resolved_save_root(dataset_name, prompt_mode, grouped_settings)
+    output_model_root = save_root or resolved_save_root(dataset_name, prompt_mode, grouped_settings)
     study_name = study_name or resolved_study_name(dataset_name, model_family, prompt_mode, grouped_settings)
+    study_timestamp = study_name.removeprefix(f"Hpo_Study_{prompt_mode}_")
+    path_layout = build_single_dataset_layout(
+        dataset_name=dataset_name,
+        prompt_mode=prompt_mode,
+        eval_level=grouped_eval_level_for_dataset(dataset_name, grouped_settings),
+        base_output_dir=os.path.dirname(output_model_root),
+        base_storage_dir=os.path.dirname(storage_path),
+        study_timestamp=study_timestamp,
+    )
     model_path = resolve_model_path(model_family)
     num_gpus = int(os.environ.get("NUM_GPUS", "4"))
 
@@ -406,20 +478,18 @@ def run_optimization(
     os.environ["PROMPT_MODE"] = prompt_mode
     os.environ["TASK_VARIANT"] = task_variant
     os.environ["STORAGE_PATH"] = storage_path
-    os.environ["SAVE_PATH"] = save_root
+    os.environ["SAVE_PATH"] = output_model_root
     os.environ["DATASET_NAME"] = dataset_name
     apply_grouped_eval_env(grouped_settings)
 
     os.makedirs(storage_path, exist_ok=True)
-    os.makedirs(save_root, exist_ok=True)
+    os.makedirs(path_layout.study_dir, exist_ok=True)
 
     storage = f"sqlite:///{os.path.abspath(storage_path)}/{study_name}.db"
     logger.info("\n%s", "=" * 70)
     logger.info("Starting Optuna Hyperparameter Optimization")
-    logger.info("  Dataset: %s", dataset_name)
     logger.info("  Study Name: %s", study_name)
     logger.info("  Model Family: %s", model_family)
-    logger.info("  Prompt Mode: %s", prompt_mode)
     logger.info("  Task Variant: %s", task_variant)
     logger.info("  Launch Input Mode: %s", launch_input_mode)
     logger.info("  Pruning Enabled: %s", enable_pruning)
@@ -436,7 +506,12 @@ def run_optimization(
         )
     logger.info("  Number of Trials: %s", n_trials)
     logger.info("  Storage: %s", storage)
-    logger.info("  Save Root: %s", save_root)
+    log_optuna_path_details(
+        dataset_name=dataset_name,
+        prompt_mode=prompt_mode,
+        eval_level=grouped_eval_level_for_dataset(dataset_name, grouped_settings),
+        path_layout=path_layout,
+    )
     logger.info("%s\n", "=" * 70)
 
     study = optuna.create_study(
@@ -455,7 +530,9 @@ def run_optimization(
     objective = build_objective(
         dataset_cfg=dataset_cfg,
         model_path=model_path,
-        save_root=save_root,
+        output_model_root=output_model_root,
+        study_name=study_name,
+        study_timestamp=study_timestamp,
         num_gpus=num_gpus,
         model_family=model_family,
         enable_pruning=enable_pruning,
@@ -645,8 +722,70 @@ if __name__ == "__main__":
         type=float,
         default=float(os.environ.get("EATD_PERSON_THRESHOLD", "0.5")),
     )
+    parser.add_argument(
+        "--print-paths-only",
+        action="store_true",
+        help="Print resolved Optuna paths and exit before CUDA, dataset loading, or optimization.",
+    )
+    parser.add_argument(
+        "--trial-number",
+        type=int,
+        default=int(os.environ.get("TRIAL_NUMBER", "1")),
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=float(os.environ.get("LR", "4e-05")),
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=int(os.environ.get("BATCH_SIZE", "1")),
+    )
+    parser.add_argument(
+        "--lora-r",
+        type=int,
+        default=int(os.environ.get("LORA_R", "8")),
+    )
+    parser.add_argument(
+        "--lora-alpha",
+        type=int,
+        default=int(os.environ.get("LORA_ALPHA", "16")),
+    )
+    parser.add_argument(
+        "--study-timestamp",
+        type=str,
+        default=os.environ.get("STUDY_TIMESTAMP"),
+    )
 
     args = parser.parse_args()
+
+    grouped_settings = resolve_grouped_eval_settings(args)
+    model_family = normalize_model_family(args.model_family)
+    eval_level = grouped_eval_level_for_dataset(args.dataset_name, grouped_settings)
+    output_model_root = args.save_root or resolved_save_root(args.dataset_name, args.prompt_mode, grouped_settings)
+    storage_path = args.storage_path or resolved_storage_path(args.dataset_name, grouped_settings)
+    path_layout = build_single_dataset_layout(
+        dataset_name=args.dataset_name,
+        prompt_mode=args.prompt_mode,
+        eval_level=eval_level,
+        base_output_dir=os.path.dirname(output_model_root),
+        base_storage_dir=os.path.dirname(storage_path),
+        study_timestamp=args.study_timestamp,
+        trial_number=args.trial_number,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+    )
+    if should_print_paths_only(args):
+        print_single_dataset_paths(
+            dataset_name=args.dataset_name,
+            prompt_mode=args.prompt_mode,
+            eval_level=eval_level,
+            path_layout=path_layout,
+        )
+        sys.exit(0)
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available! This script requires GPU.")
@@ -657,15 +796,15 @@ if __name__ == "__main__":
     run_optimization(
         n_trials=args.n_trials,
         study_name=args.study_name,
-        storage_path=args.storage_path,
+        storage_path=storage_path,
         dataset_name=args.dataset_name,
-        model_family=normalize_model_family(args.model_family),
+        model_family=model_family,
         prompt_mode=args.prompt_mode,
         task_variant=args.task_variant,
-        save_root=args.save_root,
+        save_root=output_model_root,
         enable_pruning=args.enable_pruning,
         pruner_startup_trials=args.pruner_startup_trials,
         pruner_warmup_steps=args.pruner_warmup_steps,
         pruner_interval_steps=args.pruner_interval_steps,
-        grouped_settings=resolve_grouped_eval_settings(args),
+        grouped_settings=grouped_settings,
     )

@@ -23,7 +23,9 @@ from optuna_hpo.hpo import (
     TASK_VARIANT_FILTERED,
     apply_dataset_env,
     apply_grouped_eval_env,
-    default_save_root,
+    grouped_eval_level_for_dataset,
+    print_single_dataset_paths,
+    should_print_paths_only,
     get_dataset_config,
     normalize_model_family,
     resolve_grouped_eval_settings,
@@ -31,6 +33,7 @@ from optuna_hpo.hpo import (
     resolve_model_path,
     validate_mode_combination,
 )
+from optuna_hpo.path_helpers import build_single_dataset_layout
 from optuna_hpo.train_launcher import launch_ddp_training
 
 
@@ -109,12 +112,48 @@ def main():
         type=float,
         default=float(os.environ.get("EATD_PERSON_THRESHOLD", "0.5")),
     )
+    parser.add_argument(
+        "--print-paths-only",
+        action="store_true",
+        help="Print resolved trial paths and exit before dataset loading or training.",
+    )
+    parser.add_argument(
+        "--study-timestamp",
+        type=str,
+        default=os.environ.get("STUDY_TIMESTAMP"),
+    )
 
     args = parser.parse_args()
 
     model_family = normalize_model_family(args.model_family)
     validate_mode_combination(model_family, args.prompt_mode)
     grouped_settings = resolve_grouped_eval_settings(args)
+    eval_level = grouped_eval_level_for_dataset(args.dataset_name, grouped_settings)
+    output_model_root = args.save_path or build_single_dataset_layout(
+        dataset_name=args.dataset_name,
+        prompt_mode=args.prompt_mode,
+        eval_level=eval_level,
+    ).output_model_root
+    path_layout = build_single_dataset_layout(
+        dataset_name=args.dataset_name,
+        prompt_mode=args.prompt_mode,
+        eval_level=eval_level,
+        base_output_dir=os.path.dirname(output_model_root),
+        study_timestamp=args.study_timestamp,
+        trial_number=args.trial_number,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+    )
+    if should_print_paths_only(args):
+        print_single_dataset_paths(
+            dataset_name=args.dataset_name,
+            prompt_mode=args.prompt_mode,
+            eval_level=eval_level,
+            path_layout=path_layout,
+        )
+        return
 
     dataset_cfg = get_dataset_config(args.dataset_name, args.prompt_mode, args.task_variant)
     apply_dataset_env(dataset_cfg)
@@ -127,7 +166,6 @@ def main():
 
     launch_input_mode = resolve_launch_input_mode(model_family)
     model_path = resolve_model_path(model_family)
-    save_path = args.save_path or default_save_root(args.dataset_name, args.prompt_mode)
 
     result = launch_ddp_training(
         trial=None,
@@ -141,7 +179,7 @@ def main():
         model_path=model_path,
         train_data_path=dataset_cfg.train_data_path,
         eval_data_path=dataset_cfg.eval_data_path,
-        save_path=save_path,
+        save_path=path_layout.trial_output_dir,
         dataset_name=args.dataset_name,
         input_mode=launch_input_mode,
         num_gpus=args.num_gpus,

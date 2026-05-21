@@ -48,10 +48,11 @@ elif [ "$DATASET_NAME" = "eatd" ]; then
 fi
 
 N_TRIALS=${1:-20}
-STUDY_NAME_DEFAULT="${DATASET_NAME}${DATASET_LEVEL_SUFFIX}_${MODEL_FAMILY}_${PROMPT_MODE}_hpo_$(date +%Y%m%d_%H%M%S)"
+STUDY_TIMESTAMP="${STUDY_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+STUDY_NAME_DEFAULT="Hpo_Study_${PROMPT_MODE}_${STUDY_TIMESTAMP}"
 STUDY_NAME=${2:-$STUDY_NAME_DEFAULT}
 STORAGE_PATH="${STORAGE_PATH:-optuna_studies/optuna_${DATASET_NAME}${DATASET_LEVEL_SUFFIX}}"
-SAVE_PATH="${SAVE_PATH:-output_model/optuna_${DATASET_NAME}_hpo${DATASET_LEVEL_SUFFIX}/${PROMPT_MODE}}"
+SAVE_PATH="${SAVE_PATH:-output_model/optuna_${DATASET_NAME}_hpo${DATASET_LEVEL_SUFFIX}}"
 LOG_DIR="${LOG_DIR:-logs/optuna_${DATASET_NAME}${DATASET_LEVEL_SUFFIX}}"
 PRUNING_FLAG="--disable-pruning"
 case "${ENABLE_PRUNING,,}" in
@@ -110,6 +111,13 @@ if [ -d "/gpfs/projects/etur92" ]; then
     STORAGE_PATH="$STORAGE_PATH" \
     SAVE_PATH="$SAVE_PATH" \
     LOG_DIR="$LOG_DIR" \
+    STUDY_TIMESTAMP="$STUDY_TIMESTAMP" \
+    PRINT_PATHS_ONLY="${PRINT_PATHS_ONLY:-0}" \
+    TRIAL_NUMBER="${TRIAL_NUMBER:-1}" \
+    LR="${LR:-4e-05}" \
+    BATCH_SIZE="${BATCH_SIZE:-1}" \
+    LORA_R="${LORA_R:-8}" \
+    LORA_ALPHA="${LORA_ALPHA:-16}" \
     sbatch optuna_hpo/train_hpo.slurm
 
     echo "SLURM job submitted! Check ${LOG_DIR} for progress."
@@ -118,6 +126,11 @@ else
     echo ""
 
     mkdir -p "$LOG_DIR" "$SAVE_PATH" "$STORAGE_PATH"
+
+    EXTRA_ARGS=()
+    if [ "${PRINT_PATHS_ONLY:-0}" = "1" ]; then
+        EXTRA_ARGS+=(--print-paths-only)
+    fi
 
     python optuna_hpo/hpo.py \
         --n-trials "$N_TRIALS" \
@@ -134,10 +147,17 @@ else
         --eatd-eval-level "$EATD_EVAL_LEVEL" \
         --eatd-eval-mode "$EATD_EVAL_MODE" \
         --eatd-person-threshold "$EATD_PERSON_THRESHOLD" \
+        --study-timestamp "$STUDY_TIMESTAMP" \
+        --trial-number "${TRIAL_NUMBER:-1}" \
+        --lr "${LR:-4e-05}" \
+        --batch-size "${BATCH_SIZE:-1}" \
+        --lora-r "${LORA_R:-8}" \
+        --lora-alpha "${LORA_ALPHA:-16}" \
         --pruner-startup-trials "$PRUNER_STARTUP_TRIALS" \
         --pruner-warmup-steps "$PRUNER_WARMUP_STEPS" \
         --pruner-interval-steps "$PRUNER_INTERVAL_STEPS" \
-        "$PRUNING_FLAG"
+        "$PRUNING_FLAG" \
+        "${EXTRA_ARGS[@]}"
 fi
 
 echo ""
